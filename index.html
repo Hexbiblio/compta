@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compta Coop École</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#EEF0E4; }
+  .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: #C7C7B5; border-radius: 4px; }
+  .modal-bg { background: rgba(36,49,74,0.45); }
+</style>
+</head>
+<body class="text-slate-800">
+
+<div id="warning" class="hidden text-center text-xs py-1.5 font-medium text-white" style="background:#9C3E33"></div>
+
+<div class="max-w-5xl mx-auto pb-24">
+  <!-- Header -->
+  <header class="px-4 pt-6 pb-3">
+    <p class="text-xs tracking-widest uppercase text-slate-500">Coopérative scolaire</p>
+    <h1 id="ecoleName" class="text-2xl font-bold" style="color:#24314A">Mon école</h1>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="flex gap-1 px-4 mb-4 overflow-x-auto">
+    <button data-tab="dashboard" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Tableau de bord</button>
+    <button data-tab="pieces" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Pièces</button>
+    <button data-tab="projets" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Projets</button>
+    <button data-tab="parametres" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Paramètres</button>
+  </nav>
+
+  <main id="content" class="px-4"></main>
+</div>
+
+<!-- Bouton flottant -->
+<button id="fabNew" class="fixed bottom-5 right-5 rounded-full shadow-lg flex items-center justify-center text-white text-3xl" style="width:56px;height:56px;background:#A9791F">+</button>
+
+<!-- Zone modale -->
+<div id="modalRoot"></div>
+
+<script>
+/* ============================================================= */
+/* Constantes et utilitaires                                      */
+/* ============================================================= */
+const INK="#24314A", GOLD="#A9791F", BRICK="#9C3E33", LINE="#D9D9C8", CARD="#F8F9F1";
+
+const DEFAULT_CATEGORIES = {
+  produits: [
+    "Cotisations des familles","Ventes (photos, calendriers, gâteaux...)","Dons","Subventions",
+    "Participation des familles (sorties, voyages)","Kermesse / loto / vide-grenier",
+    "Intérêts bancaires","Autres recettes"
+  ],
+  charges: [
+    "Fournitures scolaires et pédagogiques","Sorties scolaires et transport",
+    "Voyages scolaires / classes transplantées","Assurance MAE","Cotisation OCCE",
+    "Matériel et équipement","Animations et intervenants","Frais bancaires",
+    "Photocopies et fournitures administratives","Autres dépenses"
+  ]
+};
+const PAIEMENTS = ["Espèces","Chèque","Virement","Carte bancaire","Prélèvement"];
+
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function currentExercice(){
+  const d=new Date(), y=d.getFullYear(), m=d.getMonth()+1;
+  return m>=9 ? `${y}-${y+1}` : `${y-1}-${y}`;
+}
+function fmtMontant(n){
+  return (Number(n)||0).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
+}
+function fmtDate(iso){ if(!iso) return ""; const [y,m,d]=iso.split("-"); return `${d}/${m}/${y}`; }
+function esc(s){ return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+/* ============================================================= */
+/* Stockage local (localStorage)                                  */
+/* ============================================================= */
+const LS = {
+  get(key, fallback){
+    try{ const v = localStorage.getItem("cc_"+key); return v===null? fallback : JSON.parse(v); }
+    catch(e){ return fallback; }
+  },
+  set(key, value){
+    try{ localStorage.setItem("cc_"+key, JSON.stringify(value)); return true; }
+    catch(e){ return false; }
+  },
+  remove(key){ try{ localStorage.removeItem("cc_"+key); }catch(e){} },
+  listPhotoKeys(){
+    const out=[];
+    for(let i=0;i<localStorage.length;i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith("cc_photo:")) out.push(k.slice(3));
+    }
+    return out;
+  }
+};
+
+/* ============================================================= */
+/* État                                                            */
+/* ============================================================= */
+let state = {
+  entries: LS.get("entries", []),
+  categories: LS.get("categories", DEFAULT_CATEGORIES),
+  projets: LS.get("projets", []),
+  settings: LS.get("settings", {nomEcole:"", soldeInitial:0}),
+  tab: "dashboard",
+  filters: { type:"tous", compte:"tous", projet:"tous", exercice: currentExercice(), search:"" },
+  openProjet: null,
+};
+
+function persist(){
+  LS.set("entries", state.entries);
+  LS.set("categories", state.categories);
+  LS.set("projets", state.projets);
+  LS.set("settings", state.settings);
+}
+
+function showWarning(msg){
+  const el = document.getElementById("warning");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  setTimeout(()=>el.classList.add("hidden"), 4000);
+}
+
+/* ============================================================= */
+/* Compression image                                               */
+/* ============================================================= */
+function compressImage(file, maxDim=1000, quality=0.65){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onerror = ()=>reject(new Error("Lecture impossible"));
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onerror = ()=>reject(new Error("Image illisible"));
+      img.onload = ()=>{
+        let w=img.width, h=img.height;
+        if(w>h && w>maxDim){ h=Math.round(h*maxDim/w); w=maxDim; }
+        else if(h>maxDim){ w=Math.round(w*maxDim/h); h=maxDim; }
+        const canvas=document.createElement("canvas");
+        canvas.width=w; canvas.height=h;
+        const ctx=canvas.getContext("2d");
+        ctx.fillStyle="#fff"; ctx.fillRect(0,0,w,h);
+        ctx.drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ============================================================= */
+/* Logique métier                                                  */
+/* ============================================================= */
+function nextNumero(type, exercice){
+  const prefix = type==="recette" ? "R" : "D";
+  const count = state.entries.filter(e=>e.type===type && e.exercice===exercice).length;
+  const short = exercice.split("-")[1] || exercice.slice(0,4);
+  return `${prefix}-${short}-${String(count+1).padStart(3,"0")}`;
+}
+
+function exercicesList(){
+  const set = new Set(state.entries.map(e=>e.exercice));
+  set.add(currentExercice());
+  return Array.from(set).sort().reverse();
+}
+
+function soldeGlobal(){
+  const r = state.entries.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
+  const d = state.entries.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
+  return Number(state.settings.soldeInitial||0) + r - d;
+}
+
+function totauxExercice(ex){
+  const es = state.entries.filter(e=> ex==="toutes" || e.exercice===ex);
+  const r = es.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
+  const d = es.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
+  return {r,d};
+}
+
+function filteredEntries(){
+  const f = state.filters;
+  return state.entries
+    .filter(e=> f.exercice==="toutes" || e.exercice===f.exercice)
+    .filter(e=> f.type==="tous" || e.type===f.type)
+    .filter(e=> f.compte==="tous" || e.compte===f.compte)
+    .filter(e=> f.projet==="tous" || e.projet===f.projet)
+    .filter(e=>{
+      if(!f.search.trim()) return true;
+      const q=f.search.toLowerCase();
+      return e.libelle.toLowerCase().includes(q) || e.numero.toLowerCase().includes(q) || (e.notes||"").toLowerCase().includes(q);
+    })
+    .sort((a,b)=> a.date<b.date?1:-1);
+}
+
+function exportCSV(){
+  const rows=[["Numero","Date","Type","Compte","Projet","Libelle","Montant","Moyen de paiement","Notes"]];
+  state.entries.slice().sort((a,b)=>a.date>b.date?1:-1).forEach(e=>{
+    rows.push([e.numero, fmtDate(e.date), e.type==="recette"?"Recette":"Dépense", e.compte, e.projet||"",
+      e.libelle, Number(e.montant).toFixed(2).replace(".",","), e.moyenPaiement||"", (e.notes||"").replace(/\n/g," ")]);
+  });
+  const csv="\uFEFF"+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(";")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url; a.download=`compta-coop-${state.settings.nomEcole||"ecole"}-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+function resetAll(){
+  state.entries=[]; state.categories=JSON.parse(JSON.stringify(DEFAULT_CATEGORIES)); state.projets=[];
+  state.settings={nomEcole:state.settings.nomEcole, soldeInitial:0};
+  persist();
+  LS.listPhotoKeys().forEach(k=>LS.remove(k));
+  render();
+}
+
+/* ============================================================= */
+/* Rendu                                                            */
+/* ============================================================= */
+function render(){
+  document.getElementById("ecoleName").textContent = state.settings.nomEcole || "Mon école";
+  document.querySelectorAll(".tab-btn").forEach(btn=>{
+    const active = btn.dataset.tab === state.tab;
+    btn.style.background = active ? INK : "transparent";
+    btn.style.color = active ? "#fff" : "#4B5A75";
+    btn.style.border = active ? "none" : `1px solid ${LINE}`;
+  });
+  const content = document.getElementById("content");
+  if(state.tab==="dashboard") content.innerHTML = renderDashboard();
+  if(state.tab==="pieces") content.innerHTML = renderPieces();
+  if(state.tab==="projets") content.innerHTML = renderProjets();
+  if(state.tab==="parametres") content.innerHTML = renderParametres();
+  attachContentEvents();
+}
+
+function stampHtml(numero){
+  return `<span class="inline-block rounded px-2 py-0.5 text-xs font-bold mono" style="border:1.5px solid ${INK};color:${INK};background:rgba(255,255,255,0.6);transform:rotate(-1deg)">${esc(numero)}</span>`;
+}
+function badgeHtml(type){
+  const isR = type==="recette";
+  return `<span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold mono" style="background:${isR?'rgba(169,121,31,0.12)':'rgba(156,62,51,0.12)'};color:${isR?GOLD:BRICK}">${isR?'▲ Recette':'▼ Dépense'}</span>`;
+}
+function emptyHtml(title, sub){
+  return `<div class="flex flex-col items-center justify-center py-16 text-center">
+    <p class="mt-1 font-semibold" style="color:${INK}">${esc(title)}</p>
+    <p class="mt-1 text-sm text-slate-500">${esc(sub)}</p>
+  </div>`;
+}
+
+function renderDashboard(){
+  const ex = state.filters.exercice;
+  const t = totauxExercice(ex);
+  const recents = state.entries.slice().sort((a,b)=>a.date<b.date?1:-1).slice(0,6);
+  return `
+  <div class="mb-5 flex items-center justify-between flex-wrap gap-2">
+    <h2 class="text-xl font-bold" style="color:${INK}">Tableau de bord</h2>
+    <select id="dashExercice" class="text-sm rounded-md px-2 py-1.5" style="border:1px solid ${LINE};background:${CARD}">
+      ${exercicesList().map(e=>`<option value="${e}" ${e===ex?"selected":""}>${e}</option>`).join("")}
+      <option value="toutes" ${ex==="toutes"?"selected":""}>Toutes les années</option>
+    </select>
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+    <div class="rounded-xl p-5 text-white" style="background:${INK}">
+      <p class="text-xs uppercase tracking-wide opacity-70">Solde actuel</p>
+      <p class="mt-2 text-3xl font-semibold mono">${fmtMontant(soldeGlobal())}</p>
+    </div>
+    <div class="rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Recettes — ${esc(ex)}</p>
+      <p class="mt-2 text-2xl font-semibold mono" style="color:${GOLD}">${fmtMontant(t.r)}</p>
+    </div>
+    <div class="rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Dépenses — ${esc(ex)}</p>
+      <p class="mt-2 text-2xl font-semibold mono" style="color:${BRICK}">${fmtMontant(t.d)}</p>
+    </div>
+  </div>
+  <h3 class="text-sm font-semibold mb-2" style="color:${INK}">Dernières pièces</h3>
+  ${recents.length===0 ? emptyHtml("Aucune pièce enregistrée","Ajoute ton premier reçu ou facture.") :
+    `<div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
+      ${recents.map((e,i)=>`
+        <button data-open="${e.id}" class="entry-row w-full flex items-center gap-3 px-4 py-3 text-left" style="${i>0?`border-top:1px solid ${LINE}`:""}">
+          ${stampHtml(e.numero)}
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium truncate" style="color:${INK}">${esc(e.libelle)}</p>
+            <p class="text-xs text-slate-500">${fmtDate(e.date)} · ${esc(e.compte)}</p>
+          </div>
+          <span class="text-sm font-semibold mono" style="color:${e.type==='recette'?GOLD:BRICK}">${e.type==='recette'?'+':'−'} ${fmtMontant(e.montant)}</span>
+        </button>`).join("")}
+    </div>`}
+  `;
+}
+
+function renderPieces(){
+  const f = state.filters;
+  const list = filteredEntries();
+  const allComptes = [...state.categories.produits, ...state.categories.charges];
+  return `
+  <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
+    <h2 class="text-xl font-bold" style="color:${INK}">Pièces comptables</h2>
+    <button id="exportBtn" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium" style="border:1px solid ${LINE};color:${INK}">⭳ Exporter CSV</button>
+  </div>
+  <div class="flex flex-wrap gap-2 mb-4">
+    <input id="fSearch" value="${esc(f.search)}" placeholder="Rechercher..." class="flex-1 min-w-[140px] px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:${CARD}">
+    <select id="fType" class="text-sm rounded-md px-2 py-2" style="border:1px solid ${LINE};background:${CARD}">
+      <option value="tous" ${f.type==='tous'?'selected':''}>Tous types</option>
+      <option value="recette" ${f.type==='recette'?'selected':''}>Recettes</option>
+      <option value="depense" ${f.type==='depense'?'selected':''}>Dépenses</option>
+    </select>
+    <select id="fCompte" class="text-sm rounded-md px-2 py-2 max-w-[150px]" style="border:1px solid ${LINE};background:${CARD}">
+      <option value="tous">Tous comptes</option>
+      ${allComptes.map(c=>`<option value="${esc(c)}" ${f.compte===c?'selected':''}>${esc(c)}</option>`).join("")}
+    </select>
+    <select id="fProjet" class="text-sm rounded-md px-2 py-2 max-w-[150px]" style="border:1px solid ${LINE};background:${CARD}">
+      <option value="tous">Tous projets</option>
+      ${state.projets.map(p=>`<option value="${esc(p)}" ${f.projet===p?'selected':''}>${esc(p)}</option>`).join("")}
+    </select>
+    <select id="fExercice" class="text-sm rounded-md px-2 py-2" style="border:1px solid ${LINE};background:${CARD}">
+      ${exercicesList().map(e=>`<option value="${e}" ${f.exercice===e?'selected':''}>${e}</option>`).join("")}
+      <option value="toutes" ${f.exercice==='toutes'?'selected':''}>Toutes les années</option>
+    </select>
+  </div>
+  ${list.length===0 ? emptyHtml("Aucune pièce trouvée","Essaie d'ajuster tes filtres.") :
+    `<div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
+      ${list.map((e,i)=>`
+        <button data-open="${e.id}" class="entry-row w-full flex items-center gap-3 px-4 py-2.5 text-left" style="${i>0?`border-top:1px solid ${LINE}`:""}">
+          <span class="text-xs w-16 shrink-0 mono text-slate-500">${fmtDate(e.date)}</span>
+          ${stampHtml(e.numero)}
+          <span class="flex-1 min-w-0 text-sm truncate hidden sm:block" style="color:${INK}">${esc(e.libelle)}</span>
+          <span class="text-xs text-slate-500 hidden md:inline truncate max-w-[110px]">${esc(e.compte)}</span>
+          <span class="text-sm font-semibold w-24 text-right shrink-0 mono" style="color:${e.type==='recette'?GOLD:BRICK}">${e.type==='recette'?'+':'−'} ${fmtMontant(e.montant)}</span>
+        </button>`).join("")}
+    </div>`}
+  `;
+}
+
+function renderProjets(){
+  return `
+  <h2 class="text-xl font-bold mb-4" style="color:${INK}">Projets</h2>
+  <div class="flex gap-2 mb-6">
+    <input id="newProjetInput" placeholder="Ex : Classe de mer CE2, Vente de calendriers..." class="flex-1 px-3 py-2.5 text-sm rounded-md" style="border:1px solid ${LINE};background:${CARD}">
+    <button id="addProjetBtn" class="rounded-md px-4 text-sm font-semibold text-white" style="background:${INK}">Ajouter</button>
+  </div>
+  ${state.projets.length===0 ? emptyHtml("Aucun projet créé","Crée un projet pour regrouper des dépenses/recettes liées.") :
+    `<div class="space-y-3">${state.projets.map(p=>{
+      const es = state.entries.filter(e=>e.projet===p);
+      const r=es.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
+      const d=es.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
+      const solde=r-d;
+      const open = state.openProjet===p;
+      return `<div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
+        <button data-projet-toggle="${esc(p)}" class="w-full flex items-center justify-between px-4 py-3 text-left">
+          <div><p class="text-sm font-semibold" style="color:${INK}">${esc(p)}</p><p class="text-xs text-slate-500">${es.length} pièce(s)</p></div>
+          <span class="text-sm font-semibold mono" style="color:${solde>=0?GOLD:BRICK}">${fmtMontant(solde)}</span>
+        </button>
+        ${open ? `<div style="border-top:1px solid ${LINE}">
+          ${es.sort((a,b)=>a.date<b.date?1:-1).map(e=>`
+            <button data-open="${e.id}" class="entry-row w-full flex items-center gap-3 px-4 py-2.5 text-left" style="border-top:1px solid ${LINE}">
+              ${stampHtml(e.numero)}
+              <span class="text-sm flex-1 truncate" style="color:${INK}">${esc(e.libelle)}</span>
+              <span class="text-sm font-semibold mono" style="color:${e.type==='recette'?GOLD:BRICK}">${e.type==='recette'?'+':'−'} ${fmtMontant(e.montant)}</span>
+            </button>`).join("")}
+          <div class="px-4 py-2 flex justify-end">
+            <button data-projet-remove="${esc(p)}" class="text-xs font-medium" style="color:${BRICK}">Supprimer ce projet</button>
+          </div>
+        </div>` : ""}
+      </div>`;
+    }).join("")}</div>`}
+  `;
+}
+
+function renderParametres(){
+  const c = state.categories;
+  return `
+  <h2 class="text-xl font-bold mb-5" style="color:${INK}">Paramètres</h2>
+
+  <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
+    <h3 class="text-sm font-semibold mb-3" style="color:${INK}">École et solde de départ</h3>
+    <label class="block text-xs mb-1 text-slate-500">Nom de l'école</label>
+    <input id="setNomEcole" value="${esc(state.settings.nomEcole)}" placeholder="École DUCLOS" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+    <label class="block text-xs mb-1 text-slate-500">Solde initial (€)</label>
+    <input id="setSolde" type="number" step="0.01" value="${esc(state.settings.soldeInitial)}" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+    <button id="saveSettingsBtn" class="rounded-md px-4 py-2 text-sm font-semibold text-white" style="background:${INK}">Enregistrer</button>
+  </section>
+
+  <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
+    <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Comptes de produits (recettes)</h3>
+    <div class="flex flex-wrap gap-2 mb-3">
+      ${c.produits.map(x=>`<span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style="background:rgba(169,121,31,0.12);color:${GOLD}">${esc(x)}<button data-rm-produit="${esc(x)}">✕</button></span>`).join("")}
+    </div>
+    <div class="flex gap-2">
+      <input id="newProduit" placeholder="Nouveau compte de recette" class="flex-1 px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff">
+      <button id="addProduitBtn" class="rounded-md px-3" style="border:1px solid ${LINE};color:${INK}">+</button>
+    </div>
+  </section>
+
+  <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
+    <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Comptes de charges (dépenses)</h3>
+    <div class="flex flex-wrap gap-2 mb-3">
+      ${c.charges.map(x=>`<span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style="background:rgba(156,62,51,0.12);color:${BRICK}">${esc(x)}<button data-rm-charge="${esc(x)}">✕</button></span>`).join("")}
+    </div>
+    <div class="flex gap-2">
+      <input id="newCharge" placeholder="Nouveau compte de dépense" class="flex-1 px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff">
+      <button id="addChargeBtn" class="rounded-md px-3" style="border:1px solid ${LINE};color:${INK}">+</button>
+    </div>
+  </section>
+
+  <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
+    <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Sauvegarde</h3>
+    <p class="text-xs mb-3 text-slate-500">Toutes tes données restent uniquement dans ce navigateur, sur cet appareil. Exporte régulièrement en CSV pour garder une copie de secours, surtout avant de vider le cache du navigateur.</p>
+    <button id="exportBtn2" class="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">⭳ Exporter en CSV</button>
+  </section>
+
+  <section class="rounded-xl p-5" style="background:rgba(156,62,51,0.06);border:1px solid rgba(156,62,51,0.25)">
+    <h3 class="text-sm font-semibold mb-2" style="color:${BRICK}">⚠ Zone sensible</h3>
+    <p class="text-xs mb-3 text-slate-500">Supprime définitivement toutes les pièces, photos, projets et catégories. Pense à exporter avant.</p>
+    <div id="resetZone">
+      <button id="resetBtn" class="text-sm font-semibold" style="color:${BRICK}">Réinitialiser toutes les données</button>
+    </div>
+  </section>
+  `;
+}
+
+/* ============================================================= */
+/* Modales                                                          */
+/* ============================================================= */
+function openForm(editingEntry){
+  const isEdit = !!editingEntry;
+  const type = editingEntry?.type || "depense";
+  document.getElementById("modalRoot").innerHTML = `
+  <div class="fixed inset-0 z-40 flex items-end md:items-center justify-center modal-bg" id="formOverlay">
+    <form id="entryForm" class="w-full md:max-w-lg max-h-[92vh] overflow-y-auto rounded-t-2xl md:rounded-2xl p-5" style="background:#EEF0E4">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-bold" style="color:${INK}">${isEdit?"Modifier la pièce":"Nouvelle pièce comptable"}</h3>
+        <button type="button" id="closeForm" class="text-slate-500 text-xl">✕</button>
+      </div>
+      <div class="flex gap-2 mb-4">
+        <button type="button" data-type="depense" class="typeBtn flex-1 rounded-lg py-2.5 text-sm font-semibold">▼ Dépense</button>
+        <button type="button" data-type="recette" class="typeBtn flex-1 rounded-lg py-2.5 text-sm font-semibold">▲ Recette</button>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div><label class="block text-xs mb-1 text-slate-500">Date</label>
+          <input required id="fDate" type="date" value="${editingEntry?.date || new Date().toISOString().slice(0,10)}" class="w-full px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff"></div>
+        <div><label class="block text-xs mb-1 text-slate-500">Montant (€)</label>
+          <input required id="fMontant" type="number" step="0.01" min="0" value="${editingEntry?.montant ?? ''}" placeholder="0,00" class="w-full px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff"></div>
+      </div>
+      <label class="block text-xs mb-1 text-slate-500">Libellé</label>
+      <input required id="fLibelle" value="${esc(editingEntry?.libelle||'')}" placeholder="Ex : Achat fournitures" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+      <label class="block text-xs mb-1 text-slate-500">Compte</label>
+      <select required id="fCompteSel" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff"></select>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div><label class="block text-xs mb-1 text-slate-500">Projet (optionnel)</label>
+          <select id="fProjetSel" class="w-full px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff">
+            <option value="">Aucun</option>
+            ${state.projets.map(p=>`<option value="${esc(p)}" ${editingEntry?.projet===p?'selected':''}>${esc(p)}</option>`).join("")}
+          </select></div>
+        <div><label class="block text-xs mb-1 text-slate-500">Paiement</label>
+          <select id="fPaiement" class="w-full px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff">
+            ${PAIEMENTS.map(p=>`<option value="${p}" ${editingEntry?.moyenPaiement===p?'selected':''}>${p}</option>`).join("")}
+          </select></div>
+      </div>
+      <label class="block text-xs mb-1 text-slate-500">Notes (optionnel)</label>
+      <textarea id="fNotes" rows="2" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">${esc(editingEntry?.notes||'')}</textarea>
+      <label class="block text-xs mb-1 text-slate-500">Photo du reçu / de la facture</label>
+      <div id="photoZone" class="mb-3"></div>
+      <input id="fPhotoInput" type="file" accept="image/*" capture="environment" class="hidden">
+      <div class="flex gap-2 mt-2">
+        <button type="button" id="cancelForm" class="flex-1 rounded-lg py-2.5 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">Annuler</button>
+        <button type="submit" id="submitForm" class="flex-1 rounded-lg py-2.5 text-sm font-semibold text-white" style="background:${INK}">${isEdit?"Enregistrer":"Ajouter la pièce"}</button>
+      </div>
+    </form>
+  </div>`;
+
+  let currentType = type;
+  let photoData = null;
+  let photoRemoved = false;
+
+  function fillCompteOptions(){
+    const opts = currentType==="recette" ? state.categories.produits : state.categories.charges;
+    const sel = document.getElementById("fCompteSel");
+    sel.innerHTML = `<option value="">Choisir un compte...</option>` + opts.map(c=>`<option value="${esc(c)}" ${editingEntry?.compte===c?'selected':''}>${esc(c)}</option>`).join("");
+  }
+  function paintTypeButtons(){
+    document.querySelectorAll(".typeBtn").forEach(btn=>{
+      const active = btn.dataset.type === currentType;
+      const color = btn.dataset.type==="recette" ? GOLD : BRICK;
+      btn.style.background = active ? color : "#fff";
+      btn.style.color = active ? "#fff" : "#4B5A75";
+      btn.style.border = `1px solid ${active?color:LINE}`;
+    });
+  }
+  function paintPhotoZone(){
+    const zone = document.getElementById("photoZone");
+    if(photoData){
+      zone.innerHTML = `<div class="relative inline-block"><img src="${photoData}" class="rounded-lg max-h-40"><button type="button" id="removePhotoBtn" class="absolute -top-2 -right-2 rounded-full p-1 text-white" style="background:${BRICK}">✕</button></div>`;
+      document.getElementById("removePhotoBtn").onclick = ()=>{ photoData=null; photoRemoved=true; paintPhotoZone(); };
+    } else {
+      zone.innerHTML = `<button type="button" id="addPhotoBtn" class="w-full flex items-center justify-center gap-2 rounded-lg py-4 text-sm font-medium" style="border:1.5px dashed ${LINE};color:#4B5A75">📷 Ajouter une photo</button>`;
+      document.getElementById("addPhotoBtn").onclick = ()=> document.getElementById("fPhotoInput").click();
+    }
+  }
+
+  paintTypeButtons(); fillCompteOptions();
+
+  if(editingEntry?.hasPhoto){
+    const stored = LS.get("photo:"+editingEntry.id, null);
+    photoData = stored;
+  }
+  paintPhotoZone();
+
+  document.querySelectorAll(".typeBtn").forEach(btn=>{
+    btn.onclick = ()=>{ currentType=btn.dataset.type; paintTypeButtons(); fillCompteOptions(); };
+  });
+
+  document.getElementById("fPhotoInput").onchange = async (e)=>{
+    const file = e.target.files?.[0];
+    if(!file) return;
+    try{
+      photoData = await compressImage(file);
+      photoRemoved = false;
+      paintPhotoZone();
+    }catch(err){ alert("Impossible de lire cette image."); }
+  };
+
+  document.getElementById("closeForm").onclick = closeModal;
+  document.getElementById("cancelForm").onclick = closeModal;
+  document.getElementById("formOverlay").onclick = (e)=>{ if(e.target.id==="formOverlay") closeModal(); };
+
+  document.getElementById("entryForm").onsubmit = (e)=>{
+    e.preventDefault();
+    const libelle = document.getElementById("fLibelle").value.trim();
+    const montant = document.getElementById("fMontant").value;
+    const compte = document.getElementById("fCompteSel").value;
+    if(!libelle || !montant || !compte) return;
+    const exercice = editingEntry?.exercice || currentExercice();
+    const entry = {
+      id: editingEntry?.id || uid(),
+      numero: editingEntry?.numero || nextNumero(currentType, exercice),
+      exercice, type: currentType,
+      date: document.getElementById("fDate").value,
+      libelle, montant: Number(montant), compte,
+      projet: document.getElementById("fProjetSel").value || "",
+      moyenPaiement: document.getElementById("fPaiement").value,
+      notes: document.getElementById("fNotes").value.trim(),
+      hasPhoto: !photoRemoved && !!photoData,
+    };
+    const isNew = !state.entries.some(x=>x.id===entry.id);
+    state.entries = isNew ? [...state.entries, entry] : state.entries.map(x=>x.id===entry.id?entry:x);
+    let ok = true;
+    if(photoRemoved){ LS.remove("photo:"+entry.id); }
+    else if(photoData){ ok = LS.set("photo:"+entry.id, photoData); }
+    ok = LS.set("entries", state.entries) && ok;
+    if(!ok) showWarning("Stockage plein — la photo n'a peut-être pas pu être enregistrée. Essaie une photo plus légère ou exporte puis libère de l'espace.");
+    closeModal();
+    render();
+  };
+}
+
+function openDetail(entry){
+  const photo = entry.hasPhoto ? LS.get("photo:"+entry.id, null) : null;
+  document.getElementById("modalRoot").innerHTML = `
+  <div class="fixed inset-0 z-40 flex items-end md:items-center justify-center modal-bg" id="detailOverlay">
+    <div class="w-full md:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl md:rounded-2xl p-5" style="background:#EEF0E4">
+      <div class="flex items-start justify-between mb-4">
+        <div>${stampHtml(entry.numero)}<div class="mt-2">${badgeHtml(entry.type)}</div></div>
+        <button id="closeDetail" class="text-slate-500 text-xl">✕</button>
+      </div>
+      <h3 class="text-lg font-bold mb-1" style="color:${INK}">${esc(entry.libelle)}</h3>
+      <p class="text-2xl font-semibold mb-4 mono" style="color:${entry.type==='recette'?GOLD:BRICK}">${fmtMontant(entry.montant)}</p>
+      <dl class="text-sm space-y-2 mb-4">
+        <div class="flex justify-between"><dt class="text-slate-500">Date</dt><dd style="color:${INK}">${fmtDate(entry.date)}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Compte</dt><dd style="color:${INK}">${esc(entry.compte)}</dd></div>
+        ${entry.projet ? `<div class="flex justify-between"><dt class="text-slate-500">Projet</dt><dd style="color:${INK}">${esc(entry.projet)}</dd></div>`:""}
+        <div class="flex justify-between"><dt class="text-slate-500">Paiement</dt><dd style="color:${INK}">${esc(entry.moyenPaiement)}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Année scolaire</dt><dd style="color:${INK}">${esc(entry.exercice)}</dd></div>
+        ${entry.notes ? `<div><dt class="text-slate-500 mb-1">Notes</dt><dd style="color:${INK}">${esc(entry.notes)}</dd></div>`:""}
+      </dl>
+      ${photo ? `<img src="${photo}" class="w-full rounded-lg mb-4">` : ""}
+      <div class="flex gap-2">
+        <button id="editEntryBtn" class="flex-1 rounded-lg py-2.5 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">✎ Modifier</button>
+        <button id="deleteEntryBtn" class="flex-1 rounded-lg py-2.5 text-sm font-semibold" style="border:1px solid ${BRICK};color:${BRICK}">🗑 Supprimer</button>
+      </div>
+    </div>
+  </div>`;
+  document.getElementById("closeDetail").onclick = closeModal;
+  document.getElementById("detailOverlay").onclick = (e)=>{ if(e.target.id==="detailOverlay") closeModal(); };
+  document.getElementById("editEntryBtn").onclick = ()=>{ closeModal(); openForm(entry); };
+  document.getElementById("deleteEntryBtn").onclick = (e)=>{
+    if(e.target.dataset.confirmed){
+      state.entries = state.entries.filter(x=>x.id!==entry.id);
+      LS.set("entries", state.entries);
+      LS.remove("photo:"+entry.id);
+      closeModal(); render();
+    } else {
+      e.target.textContent = "Confirmer la suppression";
+      e.target.style.background = BRICK; e.target.style.color = "#fff";
+      e.target.dataset.confirmed = "1";
+    }
+  };
+}
+
+function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
+
+/* ============================================================= */
+/* Événements                                                       */
+/* ============================================================= */
+document.querySelectorAll(".tab-btn").forEach(btn=>{
+  btn.onclick = ()=>{ state.tab = btn.dataset.tab; state.openProjet=null; render(); };
+});
+document.getElementById("fabNew").onclick = ()=> openForm(null);
+
+function attachContentEvents(){
+  document.querySelectorAll("[data-open]").forEach(el=>{
+    el.onclick = ()=>{
+      const entry = state.entries.find(x=>x.id===el.dataset.open);
+      if(entry) openDetail(entry);
+    };
+  });
+
+  // Dashboard
+  const dashEx = document.getElementById("dashExercice");
+  if(dashEx) dashEx.onchange = ()=>{ state.filters.exercice = dashEx.value; render(); };
+
+  // Pieces filters
+  const fSearch = document.getElementById("fSearch");
+  if(fSearch) fSearch.oninput = ()=>{ state.filters.search = fSearch.value; render(); fSearch2Focus(); };
+  const fType = document.getElementById("fType");
+  if(fType) fType.onchange = ()=>{ state.filters.type = fType.value; render(); };
+  const fCompte = document.getElementById("fCompte");
+  if(fCompte) fCompte.onchange = ()=>{ state.filters.compte = fCompte.value; render(); };
+  const fProjet = document.getElementById("fProjet");
+  if(fProjet) fProjet.onchange = ()=>{ state.filters.projet = fProjet.value; render(); };
+  const fExercice = document.getElementById("fExercice");
+  if(fExercice) fExercice.onchange = ()=>{ state.filters.exercice = fExercice.value; render(); };
+  const exportBtn = document.getElementById("exportBtn");
+  if(exportBtn) exportBtn.onclick = exportCSV;
+  const exportBtn2 = document.getElementById("exportBtn2");
+  if(exportBtn2) exportBtn2.onclick = exportCSV;
+
+  // Projets
+  const addProjetBtn = document.getElementById("addProjetBtn");
+  if(addProjetBtn) addProjetBtn.onclick = ()=>{
+    const input = document.getElementById("newProjetInput");
+    const val = input.value.trim();
+    if(val){ state.projets = [...state.projets, val]; LS.set("projets", state.projets); render(); }
+  };
+  document.querySelectorAll("[data-projet-toggle]").forEach(el=>{
+    el.onclick = ()=>{ const p = el.dataset.projetToggle; state.openProjet = state.openProjet===p ? null : p; render(); };
+  });
+  document.querySelectorAll("[data-projet-remove]").forEach(el=>{
+    el.onclick = ()=>{ state.projets = state.projets.filter(p=>p!==el.dataset.projetRemove); LS.set("projets", state.projets); state.openProjet=null; render(); };
+  });
+
+  // Parametres
+  const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+  if(saveSettingsBtn) saveSettingsBtn.onclick = ()=>{
+    state.settings.nomEcole = document.getElementById("setNomEcole").value.trim();
+    state.settings.soldeInitial = Number(document.getElementById("setSolde").value) || 0;
+    LS.set("settings", state.settings);
+    render();
+  };
+  document.querySelectorAll("[data-rm-produit]").forEach(el=>{
+    el.onclick = ()=>{ state.categories.produits = state.categories.produits.filter(x=>x!==el.dataset.rmProduit); LS.set("categories", state.categories); render(); };
+  });
+  document.querySelectorAll("[data-rm-charge]").forEach(el=>{
+    el.onclick = ()=>{ state.categories.charges = state.categories.charges.filter(x=>x!==el.dataset.rmCharge); LS.set("categories", state.categories); render(); };
+  });
+  const addProduitBtn = document.getElementById("addProduitBtn");
+  if(addProduitBtn) addProduitBtn.onclick = ()=>{
+    const input = document.getElementById("newProduit");
+    if(input.value.trim()){ state.categories.produits = [...state.categories.produits, input.value.trim()]; LS.set("categories", state.categories); render(); }
+  };
+  const addChargeBtn = document.getElementById("addChargeBtn");
+  if(addChargeBtn) addChargeBtn.onclick = ()=>{
+    const input = document.getElementById("newCharge");
+    if(input.value.trim()){ state.categories.charges = [...state.categories.charges, input.value.trim()]; LS.set("categories", state.categories); render(); }
+  };
+  const resetBtn = document.getElementById("resetBtn");
+  if(resetBtn) resetBtn.onclick = ()=>{
+    const zone = document.getElementById("resetZone");
+    zone.innerHTML = `<span class="text-sm" style="color:${BRICK}">Confirmer la suppression totale ?</span>
+      <button id="confirmResetBtn" class="ml-3 rounded-md px-3 py-1.5 text-sm font-semibold text-white" style="background:${BRICK}">Oui, supprimer</button>
+      <button id="cancelResetBtn" class="ml-2 text-sm text-slate-500">Annuler</button>`;
+    document.getElementById("confirmResetBtn").onclick = resetAll;
+    document.getElementById("cancelResetBtn").onclick = render;
+  };
+}
+function fSearch2Focus(){
+  const el = document.getElementById("fSearch");
+  if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+
+render();
+</script>
+</body>
+</html>
