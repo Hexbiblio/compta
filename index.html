@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Compta Coop École</title>
+<title>Compta Harmonie</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#EEF0E4; }
@@ -20,8 +20,8 @@
 <div class="max-w-5xl mx-auto pb-24">
   <!-- Header -->
   <header class="px-4 pt-6 pb-3">
-    <p class="text-xs tracking-widest uppercase text-slate-500">Coopérative scolaire</p>
-    <h1 id="ecoleName" class="text-2xl font-bold" style="color:#24314A">Mon école</h1>
+    <p class="text-xs tracking-widest uppercase text-slate-500">Harmonie municipale</p>
+    <h1 id="assoName" class="text-2xl font-bold" style="color:#24314A">Mon harmonie</h1>
   </header>
 
   <!-- Tabs -->
@@ -49,24 +49,25 @@ const INK="#24314A", GOLD="#A9791F", BRICK="#9C3E33", LINE="#D9D9C8", CARD="#F8F
 
 const DEFAULT_CATEGORIES = {
   produits: [
-    "Cotisations des familles","Ventes (photos, calendriers, gâteaux...)","Dons","Subventions",
-    "Participation des familles (sorties, voyages)","Kermesse / loto / vide-grenier",
-    "Intérêts bancaires","Autres recettes"
+    "Cotisations des musiciens / adhérents","Subvention municipale","Subventions (région, département, autres)",
+    "Recettes de concerts (billetterie)","Sponsoring et partenariats","Dons",
+    "Vente de goodies / programmes","Buvette et restauration lors des événements","Autres recettes"
   ],
   charges: [
-    "Fournitures scolaires et pédagogiques","Sorties scolaires et transport",
-    "Voyages scolaires / classes transplantées","Assurance MAE","Cotisation OCCE",
-    "Matériel et équipement","Animations et intervenants","Frais bancaires",
-    "Photocopies et fournitures administratives","Autres dépenses"
+    "Achat d'instruments","Entretien et réparation d'instruments","Achat de partitions",
+    "Location de salle / de matériel","Cachets intervenants / chef d'orchestre","Assurance",
+    "Déplacements et transport (concerts, festivals)","Tenues et uniformes",
+    "Affiliation fédération musicale","Communication et affiches","Autres dépenses"
   ]
 };
 const PAIEMENTS = ["Espèces","Chèque","Virement","Carte bancaire","Prélèvement"];
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
-function currentExercice(){
-  const d=new Date(), y=d.getFullYear(), m=d.getMonth()+1;
+function exerciceForDate(iso){
+  const [y,m] = iso.split("-").map(Number);
   return m>=9 ? `${y}-${y+1}` : `${y-1}-${y}`;
 }
+function currentExercice(){ return exerciceForDate(new Date().toISOString().slice(0,10)); }
 function fmtMontant(n){
   return (Number(n)||0).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
 }
@@ -78,19 +79,19 @@ function esc(s){ return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"
 /* ============================================================= */
 const LS = {
   get(key, fallback){
-    try{ const v = localStorage.getItem("cc_"+key); return v===null? fallback : JSON.parse(v); }
+    try{ const v = localStorage.getItem("ch_"+key); return v===null? fallback : JSON.parse(v); }
     catch(e){ return fallback; }
   },
   set(key, value){
-    try{ localStorage.setItem("cc_"+key, JSON.stringify(value)); return true; }
+    try{ localStorage.setItem("ch_"+key, JSON.stringify(value)); return true; }
     catch(e){ return false; }
   },
-  remove(key){ try{ localStorage.removeItem("cc_"+key); }catch(e){} },
+  remove(key){ try{ localStorage.removeItem("ch_"+key); }catch(e){} },
   listPhotoKeys(){
     const out=[];
     for(let i=0;i<localStorage.length;i++){
       const k = localStorage.key(i);
-      if(k && k.startsWith("cc_photo:")) out.push(k.slice(3));
+      if(k && k.startsWith("ch_photo:")) out.push(k.slice(3));
     }
     return out;
   }
@@ -103,7 +104,7 @@ let state = {
   entries: LS.get("entries", []),
   categories: LS.get("categories", DEFAULT_CATEGORIES),
   projets: LS.get("projets", []),
-  settings: LS.get("settings", {nomEcole:"", soldeInitial:0}),
+  settings: LS.get("settings", {nomAsso:"", soldeInitial:0}),
   tab: "dashboard",
   filters: { type:"tous", compte:"tous", projet:"tous", exercice: currentExercice(), search:"" },
   openProjet: null,
@@ -120,7 +121,7 @@ function showWarning(msg){
   const el = document.getElementById("warning");
   el.textContent = msg;
   el.classList.remove("hidden");
-  setTimeout(()=>el.classList.add("hidden"), 4000);
+  setTimeout(()=>el.classList.add("hidden"), 5000);
 }
 
 /* ============================================================= */
@@ -204,13 +205,98 @@ function exportCSV(){
   const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
   const url=URL.createObjectURL(blob);
   const a=document.createElement("a");
-  a.href=url; a.download=`compta-coop-${state.settings.nomEcole||"ecole"}-${new Date().toISOString().slice(0,10)}.csv`;
+  a.href=url; a.download=`compta-harmonie-${state.settings.nomAsso||"association"}-${new Date().toISOString().slice(0,10)}.csv`;
   a.click(); URL.revokeObjectURL(url);
+}
+
+/* ---- Import CSV ---- */
+function parseCSVText(text){
+  text = text.replace(/^\uFEFF/, "");
+  const rows=[]; let field="", row=[], inQuotes=false, i=0;
+  while(i<text.length){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field+='"'; i+=2; continue; }
+        inQuotes=false; i++; continue;
+      }
+      field+=c; i++; continue;
+    } else {
+      if(c === '"'){ inQuotes=true; i++; continue; }
+      if(c === ';' || c === ','){ row.push(field); field=""; i++; continue; }
+      if(c === '\n'){ row.push(field); rows.push(row); row=[]; field=""; i++; continue; }
+      if(c === '\r'){ i++; continue; }
+      field+=c; i++; continue;
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => !(r.length===1 && r[0].trim()===""));
+}
+
+function handleImportCSV(file){
+  const reader = new FileReader();
+  reader.onerror = ()=> alert("Impossible de lire ce fichier.");
+  reader.onload = ()=>{
+    try{
+      const rows = parseCSVText(String(reader.result));
+      if(rows.length < 2){ alert("Ce fichier CSV semble vide."); return; }
+      const header = rows[0].map(h=>h.trim().toLowerCase());
+      const idx = (name)=> header.indexOf(name);
+      const iNum=idx("numero"), iDate=idx("date"), iType=idx("type"), iCompte=idx("compte"),
+            iProjet=idx("projet"), iLibelle=idx("libelle"), iMontant=idx("montant"),
+            iPaiement=idx("moyen de paiement"), iNotes=idx("notes");
+      if(iDate<0 || iType<0 || iMontant<0){ alert("Ce fichier ne ressemble pas à un export de cet outil (colonnes attendues : Numero, Date, Type, Compte, Projet, Libelle, Montant...)."); return; }
+
+      const existingNumeros = new Set(state.entries.map(e=>e.numero));
+      const newEntries = [];
+      let skipped = 0;
+
+      for(let r=1;r<rows.length;r++){
+        const row = rows[r];
+        const numeroRaw = (iNum>=0 ? row[iNum] : "") || "";
+        const dateRaw = (row[iDate]||"").trim();
+        const parts = dateRaw.split("/");
+        if(parts.length!==3) { skipped++; continue; }
+        const [d,m,y] = parts;
+        const dateISO = `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+        const typeRaw = (row[iType]||"").trim().toLowerCase();
+        const type = typeRaw.startsWith("rec") ? "recette" : "depense";
+        const numero = numeroRaw.trim() || nextNumero(type, exerciceForDate(dateISO));
+        if(existingNumeros.has(numero)){ skipped++; continue; }
+        const compte = (row[iCompte]||"").trim() || (type==="recette" ? "Autres recettes" : "Autres dépenses");
+        const projet = (row[iProjet]||"").trim();
+        const libelle = (row[iLibelle]||"").trim() || "(sans libellé)";
+        const montantRaw = (row[iMontant]||"0").trim().replace(",", ".");
+        const montant = parseFloat(montantRaw) || 0;
+        const moyenPaiement = (row[iPaiement]||"").trim() || "Espèces";
+        const notes = (row[iNotes]||"").trim();
+        const exercice = exerciceForDate(dateISO);
+
+        newEntries.push({ id: uid(), numero, exercice, type, date: dateISO, libelle, montant, compte, projet, moyenPaiement, notes, hasPhoto: false });
+        existingNumeros.add(numero);
+      }
+
+      if(newEntries.length){
+        state.entries = [...state.entries, ...newEntries];
+        newEntries.forEach(e=>{
+          if(e.type==="recette" && !state.categories.produits.includes(e.compte)) state.categories.produits.push(e.compte);
+          if(e.type==="depense" && !state.categories.charges.includes(e.compte)) state.categories.charges.push(e.compte);
+          if(e.projet && !state.projets.includes(e.projet)) state.projets.push(e.projet);
+        });
+        persist();
+      }
+      render();
+      alert(`Import terminé : ${newEntries.length} pièce(s) ajoutée(s), ${skipped} ignorée(s) (déjà présentes ou illisibles).\n\nÀ savoir : les photos jointes aux pièces ne sont pas incluses dans un CSV, il faudra les rejoindre manuellement si besoin.`);
+    }catch(err){
+      alert("Erreur pendant l'import : le fichier n'est peut-être pas au bon format.");
+    }
+  };
+  reader.readAsText(file, "UTF-8");
 }
 
 function resetAll(){
   state.entries=[]; state.categories=JSON.parse(JSON.stringify(DEFAULT_CATEGORIES)); state.projets=[];
-  state.settings={nomEcole:state.settings.nomEcole, soldeInitial:0};
+  state.settings={nomAsso:state.settings.nomAsso, soldeInitial:0};
   persist();
   LS.listPhotoKeys().forEach(k=>LS.remove(k));
   render();
@@ -220,7 +306,7 @@ function resetAll(){
 /* Rendu                                                            */
 /* ============================================================= */
 function render(){
-  document.getElementById("ecoleName").textContent = state.settings.nomEcole || "Mon école";
+  document.getElementById("assoName").textContent = state.settings.nomAsso || "Mon harmonie";
   document.querySelectorAll(".tab-btn").forEach(btn=>{
     const active = btn.dataset.tab === state.tab;
     btn.style.background = active ? INK : "transparent";
@@ -338,10 +424,10 @@ function renderProjets(){
   return `
   <h2 class="text-xl font-bold mb-4" style="color:${INK}">Projets</h2>
   <div class="flex gap-2 mb-6">
-    <input id="newProjetInput" placeholder="Ex : Classe de mer CE2, Vente de calendriers..." class="flex-1 px-3 py-2.5 text-sm rounded-md" style="border:1px solid ${LINE};background:${CARD}">
+    <input id="newProjetInput" placeholder="Ex : Concert de printemps, Festival d'été..." class="flex-1 px-3 py-2.5 text-sm rounded-md" style="border:1px solid ${LINE};background:${CARD}">
     <button id="addProjetBtn" class="rounded-md px-4 text-sm font-semibold text-white" style="background:${INK}">Ajouter</button>
   </div>
-  ${state.projets.length===0 ? emptyHtml("Aucun projet créé","Crée un projet pour regrouper des dépenses/recettes liées.") :
+  ${state.projets.length===0 ? emptyHtml("Aucun projet créé","Crée un projet pour regrouper des dépenses/recettes liées (concert, festival, achat groupé...).") :
     `<div class="space-y-3">${state.projets.map(p=>{
       const es = state.entries.filter(e=>e.projet===p);
       const r=es.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
@@ -375,9 +461,9 @@ function renderParametres(){
   <h2 class="text-xl font-bold mb-5" style="color:${INK}">Paramètres</h2>
 
   <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
-    <h3 class="text-sm font-semibold mb-3" style="color:${INK}">École et solde de départ</h3>
-    <label class="block text-xs mb-1 text-slate-500">Nom de l'école</label>
-    <input id="setNomEcole" value="${esc(state.settings.nomEcole)}" placeholder="École DUCLOS" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+    <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Association et solde de départ</h3>
+    <label class="block text-xs mb-1 text-slate-500">Nom de l'harmonie</label>
+    <input id="setNomAsso" value="${esc(state.settings.nomAsso)}" placeholder="Harmonie municipale de..." class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
     <label class="block text-xs mb-1 text-slate-500">Solde initial (€)</label>
     <input id="setSolde" type="number" step="0.01" value="${esc(state.settings.soldeInitial)}" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
     <button id="saveSettingsBtn" class="rounded-md px-4 py-2 text-sm font-semibold text-white" style="background:${INK}">Enregistrer</button>
@@ -407,8 +493,13 @@ function renderParametres(){
 
   <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
     <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Sauvegarde</h3>
-    <p class="text-xs mb-3 text-slate-500">Toutes tes données restent uniquement dans ce navigateur, sur cet appareil. Exporte régulièrement en CSV pour garder une copie de secours, surtout avant de vider le cache du navigateur.</p>
-    <button id="exportBtn2" class="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">⭳ Exporter en CSV</button>
+    <p class="text-xs mb-3 text-slate-500">Toutes tes données restent uniquement dans ce navigateur, sur cet appareil. Exporte régulièrement en CSV pour garder une copie de secours — et pour la retrouver sur un autre appareil ou navigateur, utilise l'import ci-dessous.</p>
+    <div class="flex flex-wrap gap-2">
+      <button id="exportBtn2" class="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">⭳ Exporter en CSV</button>
+      <button id="importBtn" class="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">⭱ Importer un CSV</button>
+      <input id="importInput" type="file" accept=".csv,text/csv" class="hidden">
+    </div>
+    <p class="text-xs mt-2 text-slate-500">L'import ajoute les pièces du fichier qui ne sont pas déjà présentes (comparaison par numéro de pièce). Les photos jointes ne sont pas incluses dans le CSV et devront être rejointes à la main si besoin.</p>
   </section>
 
   <section class="rounded-xl p-5" style="background:rgba(156,62,51,0.06);border:1px solid rgba(156,62,51,0.25)">
@@ -445,7 +536,7 @@ function openForm(editingEntry){
           <input required id="fMontant" type="number" step="0.01" min="0" value="${editingEntry?.montant ?? ''}" placeholder="0,00" class="w-full px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff"></div>
       </div>
       <label class="block text-xs mb-1 text-slate-500">Libellé</label>
-      <input required id="fLibelle" value="${esc(editingEntry?.libelle||'')}" placeholder="Ex : Achat fournitures" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+      <input required id="fLibelle" value="${esc(editingEntry?.libelle||'')}" placeholder="Ex : Achat de partitions" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
       <label class="block text-xs mb-1 text-slate-500">Compte</label>
       <select required id="fCompteSel" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff"></select>
       <div class="grid grid-cols-2 gap-3 mb-3">
@@ -503,8 +594,7 @@ function openForm(editingEntry){
   paintTypeButtons(); fillCompteOptions();
 
   if(editingEntry?.hasPhoto){
-    const stored = LS.get("photo:"+editingEntry.id, null);
-    photoData = stored;
+    photoData = LS.get("photo:"+editingEntry.id, null);
   }
   paintPhotoZone();
 
@@ -572,7 +662,7 @@ function openDetail(entry){
         <div class="flex justify-between"><dt class="text-slate-500">Compte</dt><dd style="color:${INK}">${esc(entry.compte)}</dd></div>
         ${entry.projet ? `<div class="flex justify-between"><dt class="text-slate-500">Projet</dt><dd style="color:${INK}">${esc(entry.projet)}</dd></div>`:""}
         <div class="flex justify-between"><dt class="text-slate-500">Paiement</dt><dd style="color:${INK}">${esc(entry.moyenPaiement)}</dd></div>
-        <div class="flex justify-between"><dt class="text-slate-500">Année scolaire</dt><dd style="color:${INK}">${esc(entry.exercice)}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Année</dt><dd style="color:${INK}">${esc(entry.exercice)}</dd></div>
         ${entry.notes ? `<div><dt class="text-slate-500 mb-1">Notes</dt><dd style="color:${INK}">${esc(entry.notes)}</dd></div>`:""}
       </dl>
       ${photo ? `<img src="${photo}" class="w-full rounded-lg mb-4">` : ""}
@@ -617,13 +707,11 @@ function attachContentEvents(){
     };
   });
 
-  // Dashboard
   const dashEx = document.getElementById("dashExercice");
   if(dashEx) dashEx.onchange = ()=>{ state.filters.exercice = dashEx.value; render(); };
 
-  // Pieces filters
   const fSearch = document.getElementById("fSearch");
-  if(fSearch) fSearch.oninput = ()=>{ state.filters.search = fSearch.value; render(); fSearch2Focus(); };
+  if(fSearch) fSearch.oninput = ()=>{ state.filters.search = fSearch.value; render(); focusSearch(); };
   const fType = document.getElementById("fType");
   if(fType) fType.onchange = ()=>{ state.filters.type = fType.value; render(); };
   const fCompte = document.getElementById("fCompte");
@@ -637,7 +725,17 @@ function attachContentEvents(){
   const exportBtn2 = document.getElementById("exportBtn2");
   if(exportBtn2) exportBtn2.onclick = exportCSV;
 
-  // Projets
+  const importBtn = document.getElementById("importBtn");
+  const importInput = document.getElementById("importInput");
+  if(importBtn && importInput){
+    importBtn.onclick = ()=> importInput.click();
+    importInput.onchange = (e)=>{
+      const file = e.target.files?.[0];
+      if(file) handleImportCSV(file);
+      importInput.value = "";
+    };
+  }
+
   const addProjetBtn = document.getElementById("addProjetBtn");
   if(addProjetBtn) addProjetBtn.onclick = ()=>{
     const input = document.getElementById("newProjetInput");
@@ -651,10 +749,9 @@ function attachContentEvents(){
     el.onclick = ()=>{ state.projets = state.projets.filter(p=>p!==el.dataset.projetRemove); LS.set("projets", state.projets); state.openProjet=null; render(); };
   });
 
-  // Parametres
   const saveSettingsBtn = document.getElementById("saveSettingsBtn");
   if(saveSettingsBtn) saveSettingsBtn.onclick = ()=>{
-    state.settings.nomEcole = document.getElementById("setNomEcole").value.trim();
+    state.settings.nomAsso = document.getElementById("setNomAsso").value.trim();
     state.settings.soldeInitial = Number(document.getElementById("setSolde").value) || 0;
     LS.set("settings", state.settings);
     render();
@@ -685,7 +782,7 @@ function attachContentEvents(){
     document.getElementById("cancelResetBtn").onclick = render;
   };
 }
-function fSearch2Focus(){
+function focusSearch(){
   const el = document.getElementById("fSearch");
   if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
