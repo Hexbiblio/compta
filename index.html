@@ -5,46 +5,72 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Compta Harmonie</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#EEF0E4; }
   .mono { font-family: "SFMono-Regular", Consolas, monospace; }
   ::-webkit-scrollbar { width: 8px; }
   ::-webkit-scrollbar-thumb { background: #C7C7B5; border-radius: 4px; }
   .modal-bg { background: rgba(36,49,74,0.45); }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body class="text-slate-800">
 
 <div id="warning" class="hidden text-center text-xs py-1.5 font-medium text-white" style="background:#9C3E33"></div>
 
-<div class="max-w-5xl mx-auto pb-24">
-  <!-- Header -->
-  <header class="px-4 pt-6 pb-3">
-    <p class="text-xs tracking-widest uppercase text-slate-500">Harmonie municipale</p>
-    <h1 id="assoName" class="text-2xl font-bold" style="color:#24314A">Mon harmonie</h1>
-  </header>
-
-  <!-- Tabs -->
-  <nav class="flex gap-1 px-4 mb-4 overflow-x-auto">
-    <button data-tab="dashboard" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Tableau de bord</button>
-    <button data-tab="pieces" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Pièces</button>
-    <button data-tab="projets" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Projets</button>
-    <button data-tab="parametres" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Paramètres</button>
-  </nav>
-
-  <main id="content" class="px-4"></main>
+<div id="authScreen" class="min-h-screen flex items-center justify-center px-4">
+  <div class="w-full max-w-sm rounded-2xl p-6" style="background:#F8F9F1;border:1px solid #D9D9C8">
+    <p class="text-xs tracking-widest uppercase text-slate-500 text-center">Harmonie municipale</p>
+    <h1 class="text-xl font-bold text-center mb-6" style="color:#24314A">Compta Harmonie</h1>
+    <form id="loginForm">
+      <label class="block text-xs mb-1 text-slate-500">Email</label>
+      <input required id="loginEmail" type="email" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid #D9D9C8;background:#fff">
+      <label class="block text-xs mb-1 text-slate-500">Mot de passe</label>
+      <input required id="loginPassword" type="password" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid #D9D9C8;background:#fff">
+      <p id="loginError" class="text-xs mb-3 hidden" style="color:#9C3E33"></p>
+      <button type="submit" id="loginSubmit" class="w-full rounded-lg py-2.5 text-sm font-semibold text-white" style="background:#24314A">Se connecter</button>
+    </form>
+    <p class="text-xs text-slate-500 mt-4 text-center">Pas encore de compte ? Demande à la personne qui gère l'outil de t'en créer un.</p>
+  </div>
 </div>
 
-<!-- Bouton flottant -->
-<button id="fabNew" class="fixed bottom-5 right-5 rounded-full shadow-lg flex items-center justify-center text-white text-3xl" style="width:56px;height:56px;background:#A9791F">+</button>
+<div id="appRoot" class="hidden">
+  <div class="max-w-5xl mx-auto pb-24">
+    <header class="px-4 pt-6 pb-3 flex items-start justify-between gap-2">
+      <div>
+        <p class="text-xs tracking-widest uppercase text-slate-500">Harmonie municipale</p>
+        <h1 id="assoName" class="text-2xl font-bold" style="color:#24314A">Mon harmonie</h1>
+      </div>
+      <div class="text-right shrink-0">
+        <p id="userEmail" class="text-xs text-slate-500 mb-1"></p>
+        <button id="logoutBtn" class="text-xs font-semibold" style="color:#9C3E33">Se déconnecter</button>
+      </div>
+    </header>
 
-<!-- Zone modale -->
+    <nav class="flex gap-1 px-4 mb-4 overflow-x-auto">
+      <button data-tab="dashboard" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Tableau de bord</button>
+      <button data-tab="pieces" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Pièces</button>
+      <button data-tab="projets" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Projets</button>
+      <button data-tab="parametres" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Paramètres</button>
+    </nav>
+
+    <main id="content" class="px-4"></main>
+  </div>
+
+  <button id="fabNew" class="fixed bottom-5 right-5 rounded-full shadow-lg flex items-center justify-center text-white text-3xl" style="width:56px;height:56px;background:#A9791F">+</button>
+</div>
+
 <div id="modalRoot"></div>
+<div id="loadingOverlay" class="hidden fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(238,240,228,0.85)">
+  <p class="text-sm font-medium" style="color:#24314A">Chargement...</p>
+</div>
 
 <script>
-/* ============================================================= */
-/* Constantes et utilitaires                                      */
-/* ============================================================= */
+const SUPABASE_URL = "https://ddvbksalshoeufsvtpeg.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_x40Dv3dyfjqlPfVopsrHJQ_FeDp6fvV";
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 const INK="#24314A", GOLD="#A9791F", BRICK="#9C3E33", LINE="#D9D9C8", CARD="#F8F9F1";
 
 const DEFAULT_CATEGORIES = {
@@ -62,7 +88,6 @@ const DEFAULT_CATEGORIES = {
 };
 const PAIEMENTS = ["Espèces","Chèque","Virement","Carte bancaire","Prélèvement"];
 
-function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 function exerciceForDate(iso){
   const [y,m] = iso.split("-").map(Number);
   return m>=9 ? `${y}-${y+1}` : `${y-1}-${y}`;
@@ -74,60 +99,15 @@ function fmtMontant(n){
 function fmtDate(iso){ if(!iso) return ""; const [y,m,d]=iso.split("-"); return `${d}/${m}/${y}`; }
 function esc(s){ return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
-/* ============================================================= */
-/* Stockage local (localStorage)                                  */
-/* ============================================================= */
-const LS = {
-  get(key, fallback){
-    try{ const v = localStorage.getItem("ch_"+key); return v===null? fallback : JSON.parse(v); }
-    catch(e){ return fallback; }
-  },
-  set(key, value){
-    try{ localStorage.setItem("ch_"+key, JSON.stringify(value)); return true; }
-    catch(e){ return false; }
-  },
-  remove(key){ try{ localStorage.removeItem("ch_"+key); }catch(e){} },
-  listPhotoKeys(){
-    const out=[];
-    for(let i=0;i<localStorage.length;i++){
-      const k = localStorage.key(i);
-      if(k && k.startsWith("ch_photo:")) out.push(k.slice(3));
-    }
-    return out;
-  }
-};
-
-/* ============================================================= */
-/* État                                                            */
-/* ============================================================= */
-let state = {
-  entries: LS.get("entries", []),
-  categories: LS.get("categories", DEFAULT_CATEGORIES),
-  projets: LS.get("projets", []),
-  settings: LS.get("settings", {nomAsso:"", soldeInitial:0}),
-  tab: "dashboard",
-  filters: { type:"tous", compte:"tous", projet:"tous", exercice: currentExercice(), search:"" },
-  openProjet: null,
-};
-
-function persist(){
-  LS.set("entries", state.entries);
-  LS.set("categories", state.categories);
-  LS.set("projets", state.projets);
-  LS.set("settings", state.settings);
-}
-
 function showWarning(msg){
   const el = document.getElementById("warning");
   el.textContent = msg;
   el.classList.remove("hidden");
   setTimeout(()=>el.classList.add("hidden"), 5000);
 }
+function setLoading(on){ document.getElementById("loadingOverlay").classList.toggle("hidden", !on); }
 
-/* ============================================================= */
-/* Compression image                                               */
-/* ============================================================= */
-function compressImage(file, maxDim=1000, quality=0.65){
+function compressImage(file, maxDim=900, quality=0.6){
   return new Promise((resolve,reject)=>{
     const reader = new FileReader();
     reader.onerror = ()=>reject(new Error("Lecture impossible"));
@@ -151,35 +131,103 @@ function compressImage(file, maxDim=1000, quality=0.65){
   });
 }
 
-/* ============================================================= */
-/* Logique métier                                                  */
-/* ============================================================= */
+let currentUserEmail = "";
+
+async function fetchEntriesList(){
+  const { data, error } = await db.from("entries")
+    .select("id,numero,exercice,type,date,libelle,montant,compte,projet,moyen_paiement,notes,has_photo,created_by")
+    .order("date", { ascending: false });
+  if(error){ showWarning("Erreur de chargement des pièces : " + error.message); return []; }
+  return data.map(r => ({
+    id: r.id, numero: r.numero, exercice: r.exercice, type: r.type, date: r.date,
+    libelle: r.libelle, montant: r.montant, compte: r.compte, projet: r.projet || "",
+    moyenPaiement: r.moyen_paiement || "", notes: r.notes || "", hasPhoto: !!r.has_photo,
+    createdBy: r.created_by || "",
+  }));
+}
+
+async function fetchPhoto(id){
+  const { data, error } = await db.from("entries").select("photo").eq("id", id).maybeSingle();
+  if(error || !data) return null;
+  return data.photo;
+}
+
+async function upsertEntryRemote(entry, photoValue){
+  const row = {
+    id: entry.id, numero: entry.numero, exercice: entry.exercice, type: entry.type,
+    date: entry.date, libelle: entry.libelle, montant: entry.montant, compte: entry.compte,
+    projet: entry.projet || "", moyen_paiement: entry.moyenPaiement || "", notes: entry.notes || "",
+    has_photo: entry.hasPhoto, created_by: currentUserEmail,
+  };
+  if(photoValue !== undefined) row.photo = photoValue;
+  const { error } = await db.from("entries").upsert(row);
+  return !error;
+}
+
+async function deleteEntryRemote(id){
+  const { error } = await db.from("entries").delete().eq("id", id);
+  return !error;
+}
+
+async function loadAppData(key, fallback){
+  const { data, error } = await db.from("app_data").select("value").eq("key", key).maybeSingle();
+  if(error || !data) return fallback;
+  return data.value;
+}
+async function saveAppData(key, value){
+  const { error } = await db.from("app_data").upsert({ key, value, updated_at: new Date().toISOString() });
+  if(error) showWarning("Erreur de sauvegarde : " + error.message);
+  return !error;
+}
+
+let state = {
+  entries: [],
+  categories: DEFAULT_CATEGORIES,
+  projets: [],
+  settings: { nomAsso: "", soldeInitial: 0 },
+  tab: "dashboard",
+  filters: { type:"tous", compte:"tous", projet:"tous", exercice: currentExercice(), search:"" },
+  openProjet: null,
+};
+
+async function loadAll(){
+  setLoading(true);
+  const [entries, categories, projets, settings] = await Promise.all([
+    fetchEntriesList(),
+    loadAppData("categories", DEFAULT_CATEGORIES),
+    loadAppData("projets", []),
+    loadAppData("settings", { nomAsso: "", soldeInitial: 0 }),
+  ]);
+  state.entries = entries;
+  state.categories = categories;
+  state.projets = projets;
+  state.settings = settings;
+  setLoading(false);
+  render();
+}
+
 function nextNumero(type, exercice){
   const prefix = type==="recette" ? "R" : "D";
   const count = state.entries.filter(e=>e.type===type && e.exercice===exercice).length;
   const short = exercice.split("-")[1] || exercice.slice(0,4);
   return `${prefix}-${short}-${String(count+1).padStart(3,"0")}`;
 }
-
 function exercicesList(){
   const set = new Set(state.entries.map(e=>e.exercice));
   set.add(currentExercice());
   return Array.from(set).sort().reverse();
 }
-
 function soldeGlobal(){
   const r = state.entries.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
   const d = state.entries.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
   return Number(state.settings.soldeInitial||0) + r - d;
 }
-
 function totauxExercice(ex){
   const es = state.entries.filter(e=> ex==="toutes" || e.exercice===ex);
   const r = es.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
   const d = es.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
   return {r,d};
 }
-
 function filteredEntries(){
   const f = state.filters;
   return state.entries
@@ -209,7 +257,6 @@ function exportCSV(){
   a.click(); URL.revokeObjectURL(url);
 }
 
-/* ---- Import CSV ---- */
 function parseCSVText(text){
   text = text.replace(/^\uFEFF/, "");
   const rows=[]; let field="", row=[], inQuotes=false, i=0;
@@ -233,78 +280,64 @@ function parseCSVText(text){
   return rows.filter(r => !(r.length===1 && r[0].trim()===""));
 }
 
-function handleImportCSV(file){
-  const reader = new FileReader();
-  reader.onerror = ()=> alert("Impossible de lire ce fichier.");
-  reader.onload = ()=>{
-    try{
-      const rows = parseCSVText(String(reader.result));
-      if(rows.length < 2){ alert("Ce fichier CSV semble vide."); return; }
-      const header = rows[0].map(h=>h.trim().toLowerCase());
-      const idx = (name)=> header.indexOf(name);
-      const iNum=idx("numero"), iDate=idx("date"), iType=idx("type"), iCompte=idx("compte"),
-            iProjet=idx("projet"), iLibelle=idx("libelle"), iMontant=idx("montant"),
-            iPaiement=idx("moyen de paiement"), iNotes=idx("notes");
-      if(iDate<0 || iType<0 || iMontant<0){ alert("Ce fichier ne ressemble pas à un export de cet outil (colonnes attendues : Numero, Date, Type, Compte, Projet, Libelle, Montant...)."); return; }
+async function handleImportCSV(file){
+  const text = await file.text();
+  let rows;
+  try{ rows = parseCSVText(text); } catch(e){ alert("Erreur pendant la lecture du fichier."); return; }
+  if(rows.length < 2){ alert("Ce fichier CSV semble vide."); return; }
+  const header = rows[0].map(h=>h.trim().toLowerCase());
+  const idx = (name)=> header.indexOf(name);
+  const iNum=idx("numero"), iDate=idx("date"), iType=idx("type"), iCompte=idx("compte"),
+        iProjet=idx("projet"), iLibelle=idx("libelle"), iMontant=idx("montant"),
+        iPaiement=idx("moyen de paiement"), iNotes=idx("notes");
+  if(iDate<0 || iType<0 || iMontant<0){ alert("Ce fichier ne ressemble pas à un export de cet outil."); return; }
 
-      const existingNumeros = new Set(state.entries.map(e=>e.numero));
-      const newEntries = [];
-      let skipped = 0;
+  const existingNumeros = new Set(state.entries.map(e=>e.numero));
+  const toInsert = [];
+  let skipped = 0;
 
-      for(let r=1;r<rows.length;r++){
-        const row = rows[r];
-        const numeroRaw = (iNum>=0 ? row[iNum] : "") || "";
-        const dateRaw = (row[iDate]||"").trim();
-        const parts = dateRaw.split("/");
-        if(parts.length!==3) { skipped++; continue; }
-        const [d,m,y] = parts;
-        const dateISO = `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
-        const typeRaw = (row[iType]||"").trim().toLowerCase();
-        const type = typeRaw.startsWith("rec") ? "recette" : "depense";
-        const numero = numeroRaw.trim() || nextNumero(type, exerciceForDate(dateISO));
-        if(existingNumeros.has(numero)){ skipped++; continue; }
-        const compte = (row[iCompte]||"").trim() || (type==="recette" ? "Autres recettes" : "Autres dépenses");
-        const projet = (row[iProjet]||"").trim();
-        const libelle = (row[iLibelle]||"").trim() || "(sans libellé)";
-        const montantRaw = (row[iMontant]||"0").trim().replace(",", ".");
-        const montant = parseFloat(montantRaw) || 0;
-        const moyenPaiement = (row[iPaiement]||"").trim() || "Espèces";
-        const notes = (row[iNotes]||"").trim();
-        const exercice = exerciceForDate(dateISO);
+  for(let r=1;r<rows.length;r++){
+    const row = rows[r];
+    const dateRaw = (row[iDate]||"").trim();
+    const parts = dateRaw.split("/");
+    if(parts.length!==3){ skipped++; continue; }
+    const [d,m,y] = parts;
+    const dateISO = `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+    const typeRaw = (row[iType]||"").trim().toLowerCase();
+    const type = typeRaw.startsWith("rec") ? "recette" : "depense";
+    const numeroRaw = (iNum>=0 ? row[iNum] : "") || "";
+    const numero = numeroRaw.trim() || nextNumero(type, exerciceForDate(dateISO));
+    if(existingNumeros.has(numero)){ skipped++; continue; }
+    const compte = (row[iCompte]||"").trim() || (type==="recette" ? "Autres recettes" : "Autres dépenses");
+    const projet = (row[iProjet]||"").trim();
+    const libelle = (row[iLibelle]||"").trim() || "(sans libellé)";
+    const montant = parseFloat((row[iMontant]||"0").trim().replace(",", ".")) || 0;
+    const moyenPaiement = (row[iPaiement]||"").trim() || "Espèces";
+    const notes = (row[iNotes]||"").trim();
+    const exercice = exerciceForDate(dateISO);
 
-        newEntries.push({ id: uid(), numero, exercice, type, date: dateISO, libelle, montant, compte, projet, moyenPaiement, notes, hasPhoto: false });
-        existingNumeros.add(numero);
-      }
+    toInsert.push({
+      id: crypto.randomUUID(), numero, exercice, type, date: dateISO, libelle, montant,
+      compte, projet, moyenPaiement, notes, hasPhoto: false,
+    });
+    existingNumeros.add(numero);
+  }
 
-      if(newEntries.length){
-        state.entries = [...state.entries, ...newEntries];
-        newEntries.forEach(e=>{
-          if(e.type==="recette" && !state.categories.produits.includes(e.compte)) state.categories.produits.push(e.compte);
-          if(e.type==="depense" && !state.categories.charges.includes(e.compte)) state.categories.charges.push(e.compte);
-          if(e.projet && !state.projets.includes(e.projet)) state.projets.push(e.projet);
-        });
-        persist();
-      }
-      render();
-      alert(`Import terminé : ${newEntries.length} pièce(s) ajoutée(s), ${skipped} ignorée(s) (déjà présentes ou illisibles).\n\nÀ savoir : les photos jointes aux pièces ne sont pas incluses dans un CSV, il faudra les rejoindre manuellement si besoin.`);
-    }catch(err){
-      alert("Erreur pendant l'import : le fichier n'est peut-être pas au bon format.");
-    }
-  };
-  reader.readAsText(file, "UTF-8");
+  if(toInsert.length){
+    setLoading(true);
+    for(const e of toInsert){ await upsertEntryRemote(e, undefined); }
+    toInsert.forEach(e=>{
+      if(e.type==="recette" && !state.categories.produits.includes(e.compte)) state.categories.produits.push(e.compte);
+      if(e.type==="depense" && !state.categories.charges.includes(e.compte)) state.categories.charges.push(e.compte);
+      if(e.projet && !state.projets.includes(e.projet)) state.projets.push(e.projet);
+    });
+    await saveAppData("categories", state.categories);
+    await saveAppData("projets", state.projets);
+    await loadAll();
+  }
+  alert(`Import terminé : ${toInsert.length} pièce(s) ajoutée(s), ${skipped} ignorée(s) (déjà présentes ou illisibles).\n\nÀ savoir : les photos jointes aux pièces ne sont pas incluses dans un CSV.`);
 }
 
-function resetAll(){
-  state.entries=[]; state.categories=JSON.parse(JSON.stringify(DEFAULT_CATEGORIES)); state.projets=[];
-  state.settings={nomAsso:state.settings.nomAsso, soldeInitial:0};
-  persist();
-  LS.listPhotoKeys().forEach(k=>LS.remove(k));
-  render();
-}
-
-/* ============================================================= */
-/* Rendu                                                            */
-/* ============================================================= */
 function render(){
   document.getElementById("assoName").textContent = state.settings.nomAsso || "Mon harmonie";
   document.querySelectorAll(".tab-btn").forEach(btn=>{
@@ -369,7 +402,7 @@ function renderDashboard(){
           ${stampHtml(e.numero)}
           <div class="flex-1 min-w-0">
             <p class="text-sm font-medium truncate" style="color:${INK}">${esc(e.libelle)}</p>
-            <p class="text-xs text-slate-500">${fmtDate(e.date)} · ${esc(e.compte)}</p>
+            <p class="text-xs text-slate-500">${fmtDate(e.date)} · ${esc(e.compte)}${e.createdBy?` · ${esc(e.createdBy)}`:""}</p>
           </div>
           <span class="text-sm font-semibold mono" style="color:${e.type==='recette'?GOLD:BRICK}">${e.type==='recette'?'+':'−'} ${fmtMontant(e.montant)}</span>
         </button>`).join("")}
@@ -427,7 +460,7 @@ function renderProjets(){
     <input id="newProjetInput" placeholder="Ex : Concert de printemps, Festival d'été..." class="flex-1 px-3 py-2.5 text-sm rounded-md" style="border:1px solid ${LINE};background:${CARD}">
     <button id="addProjetBtn" class="rounded-md px-4 text-sm font-semibold text-white" style="background:${INK}">Ajouter</button>
   </div>
-  ${state.projets.length===0 ? emptyHtml("Aucun projet créé","Crée un projet pour regrouper des dépenses/recettes liées (concert, festival, achat groupé...).") :
+  ${state.projets.length===0 ? emptyHtml("Aucun projet créé","Crée un projet pour regrouper des dépenses/recettes liées.") :
     `<div class="space-y-3">${state.projets.map(p=>{
       const es = state.entries.filter(e=>e.projet===p);
       const r=es.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
@@ -493,28 +526,17 @@ function renderParametres(){
 
   <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
     <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Sauvegarde</h3>
-    <p class="text-xs mb-3 text-slate-500">Toutes tes données restent uniquement dans ce navigateur, sur cet appareil. Exporte régulièrement en CSV pour garder une copie de secours — et pour la retrouver sur un autre appareil ou navigateur, utilise l'import ci-dessous.</p>
+    <p class="text-xs mb-3 text-slate-500">Les données sont désormais partagées entre tous les comptes de l'harmonie, en temps réel. Exporte quand même en CSV de temps en temps pour garder une copie de secours.</p>
     <div class="flex flex-wrap gap-2">
       <button id="exportBtn2" class="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">⭳ Exporter en CSV</button>
       <button id="importBtn" class="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">⭱ Importer un CSV</button>
       <input id="importInput" type="file" accept=".csv,text/csv" class="hidden">
     </div>
-    <p class="text-xs mt-2 text-slate-500">L'import ajoute les pièces du fichier qui ne sont pas déjà présentes (comparaison par numéro de pièce). Les photos jointes ne sont pas incluses dans le CSV et devront être rejointes à la main si besoin.</p>
-  </section>
-
-  <section class="rounded-xl p-5" style="background:rgba(156,62,51,0.06);border:1px solid rgba(156,62,51,0.25)">
-    <h3 class="text-sm font-semibold mb-2" style="color:${BRICK}">⚠ Zone sensible</h3>
-    <p class="text-xs mb-3 text-slate-500">Supprime définitivement toutes les pièces, photos, projets et catégories. Pense à exporter avant.</p>
-    <div id="resetZone">
-      <button id="resetBtn" class="text-sm font-semibold" style="color:${BRICK}">Réinitialiser toutes les données</button>
-    </div>
+    <p class="text-xs mt-2 text-slate-500">L'import ajoute les pièces du fichier qui ne sont pas déjà présentes (comparaison par numéro). Les photos ne sont pas incluses dans le CSV.</p>
   </section>
   `;
 }
 
-/* ============================================================= */
-/* Modales                                                          */
-/* ============================================================= */
 function openForm(editingEntry){
   const isEdit = !!editingEntry;
   const type = editingEntry?.type || "depense";
@@ -580,8 +602,9 @@ function openForm(editingEntry){
       btn.style.border = `1px solid ${active?color:LINE}`;
     });
   }
-  function paintPhotoZone(){
+  function paintPhotoZone(loading){
     const zone = document.getElementById("photoZone");
+    if(loading){ zone.innerHTML = `<p class="text-xs text-slate-500">Chargement de la photo...</p>`; return; }
     if(photoData){
       zone.innerHTML = `<div class="relative inline-block"><img src="${photoData}" class="rounded-lg max-h-40"><button type="button" id="removePhotoBtn" class="absolute -top-2 -right-2 rounded-full p-1 text-white" style="background:${BRICK}">✕</button></div>`;
       document.getElementById("removePhotoBtn").onclick = ()=>{ photoData=null; photoRemoved=true; paintPhotoZone(); };
@@ -594,9 +617,11 @@ function openForm(editingEntry){
   paintTypeButtons(); fillCompteOptions();
 
   if(editingEntry?.hasPhoto){
-    photoData = LS.get("photo:"+editingEntry.id, null);
+    paintPhotoZone(true);
+    fetchPhoto(editingEntry.id).then(p=>{ photoData = p; paintPhotoZone(); });
+  } else {
+    paintPhotoZone();
   }
-  paintPhotoZone();
 
   document.querySelectorAll(".typeBtn").forEach(btn=>{
     btn.onclick = ()=>{ currentType=btn.dataset.type; paintTypeButtons(); fillCompteOptions(); };
@@ -616,15 +641,17 @@ function openForm(editingEntry){
   document.getElementById("cancelForm").onclick = closeModal;
   document.getElementById("formOverlay").onclick = (e)=>{ if(e.target.id==="formOverlay") closeModal(); };
 
-  document.getElementById("entryForm").onsubmit = (e)=>{
+  document.getElementById("entryForm").onsubmit = async (e)=>{
     e.preventDefault();
     const libelle = document.getElementById("fLibelle").value.trim();
     const montant = document.getElementById("fMontant").value;
     const compte = document.getElementById("fCompteSel").value;
     if(!libelle || !montant || !compte) return;
+    const submitBtn = document.getElementById("submitForm");
+    submitBtn.disabled = true; submitBtn.textContent = "Enregistrement...";
     const exercice = editingEntry?.exercice || currentExercice();
     const entry = {
-      id: editingEntry?.id || uid(),
+      id: editingEntry?.id || crypto.randomUUID(),
       numero: editingEntry?.numero || nextNumero(currentType, exercice),
       exercice, type: currentType,
       date: document.getElementById("fDate").value,
@@ -634,20 +661,15 @@ function openForm(editingEntry){
       notes: document.getElementById("fNotes").value.trim(),
       hasPhoto: !photoRemoved && !!photoData,
     };
-    const isNew = !state.entries.some(x=>x.id===entry.id);
-    state.entries = isNew ? [...state.entries, entry] : state.entries.map(x=>x.id===entry.id?entry:x);
-    let ok = true;
-    if(photoRemoved){ LS.remove("photo:"+entry.id); }
-    else if(photoData){ ok = LS.set("photo:"+entry.id, photoData); }
-    ok = LS.set("entries", state.entries) && ok;
-    if(!ok) showWarning("Stockage plein — la photo n'a peut-être pas pu être enregistrée. Essaie une photo plus légère ou exporte puis libère de l'espace.");
+    const photoValue = photoRemoved ? null : (photoData !== undefined ? photoData : undefined);
+    const ok = await upsertEntryRemote(entry, photoValue);
+    if(!ok) showWarning("Erreur lors de l'enregistrement — réessaie.");
     closeModal();
-    render();
+    await loadAll();
   };
 }
 
 function openDetail(entry){
-  const photo = entry.hasPhoto ? LS.get("photo:"+entry.id, null) : null;
   document.getElementById("modalRoot").innerHTML = `
   <div class="fixed inset-0 z-40 flex items-end md:items-center justify-center modal-bg" id="detailOverlay">
     <div class="w-full md:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl md:rounded-2xl p-5" style="background:#EEF0E4">
@@ -663,24 +685,31 @@ function openDetail(entry){
         ${entry.projet ? `<div class="flex justify-between"><dt class="text-slate-500">Projet</dt><dd style="color:${INK}">${esc(entry.projet)}</dd></div>`:""}
         <div class="flex justify-between"><dt class="text-slate-500">Paiement</dt><dd style="color:${INK}">${esc(entry.moyenPaiement)}</dd></div>
         <div class="flex justify-between"><dt class="text-slate-500">Année</dt><dd style="color:${INK}">${esc(entry.exercice)}</dd></div>
+        ${entry.createdBy ? `<div class="flex justify-between"><dt class="text-slate-500">Ajouté par</dt><dd style="color:${INK}">${esc(entry.createdBy)}</dd></div>`:""}
         ${entry.notes ? `<div><dt class="text-slate-500 mb-1">Notes</dt><dd style="color:${INK}">${esc(entry.notes)}</dd></div>`:""}
       </dl>
-      ${photo ? `<img src="${photo}" class="w-full rounded-lg mb-4">` : ""}
+      <div id="detailPhotoZone" class="mb-4"></div>
       <div class="flex gap-2">
         <button id="editEntryBtn" class="flex-1 rounded-lg py-2.5 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">✎ Modifier</button>
         <button id="deleteEntryBtn" class="flex-1 rounded-lg py-2.5 text-sm font-semibold" style="border:1px solid ${BRICK};color:${BRICK}">🗑 Supprimer</button>
       </div>
     </div>
   </div>`;
+  if(entry.hasPhoto){
+    document.getElementById("detailPhotoZone").innerHTML = `<p class="text-xs text-slate-500">Chargement de la photo...</p>`;
+    fetchPhoto(entry.id).then(p=>{
+      const zone = document.getElementById("detailPhotoZone");
+      if(zone) zone.innerHTML = p ? `<img src="${p}" class="w-full rounded-lg">` : "";
+    });
+  }
   document.getElementById("closeDetail").onclick = closeModal;
   document.getElementById("detailOverlay").onclick = (e)=>{ if(e.target.id==="detailOverlay") closeModal(); };
   document.getElementById("editEntryBtn").onclick = ()=>{ closeModal(); openForm(entry); };
-  document.getElementById("deleteEntryBtn").onclick = (e)=>{
+  document.getElementById("deleteEntryBtn").onclick = async (e)=>{
     if(e.target.dataset.confirmed){
-      state.entries = state.entries.filter(x=>x.id!==entry.id);
-      LS.set("entries", state.entries);
-      LS.remove("photo:"+entry.id);
-      closeModal(); render();
+      const ok = await deleteEntryRemote(entry.id);
+      if(!ok) showWarning("Erreur lors de la suppression.");
+      closeModal(); await loadAll();
     } else {
       e.target.textContent = "Confirmer la suppression";
       e.target.style.background = BRICK; e.target.style.color = "#fff";
@@ -691,9 +720,6 @@ function openDetail(entry){
 
 function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
 
-/* ============================================================= */
-/* Événements                                                       */
-/* ============================================================= */
 document.querySelectorAll(".tab-btn").forEach(btn=>{
   btn.onclick = ()=>{ state.tab = btn.dataset.tab; state.openProjet=null; render(); };
 });
@@ -737,49 +763,40 @@ function attachContentEvents(){
   }
 
   const addProjetBtn = document.getElementById("addProjetBtn");
-  if(addProjetBtn) addProjetBtn.onclick = ()=>{
+  if(addProjetBtn) addProjetBtn.onclick = async ()=>{
     const input = document.getElementById("newProjetInput");
     const val = input.value.trim();
-    if(val){ state.projets = [...state.projets, val]; LS.set("projets", state.projets); render(); }
+    if(val){ state.projets = [...state.projets, val]; await saveAppData("projets", state.projets); render(); }
   };
   document.querySelectorAll("[data-projet-toggle]").forEach(el=>{
     el.onclick = ()=>{ const p = el.dataset.projetToggle; state.openProjet = state.openProjet===p ? null : p; render(); };
   });
   document.querySelectorAll("[data-projet-remove]").forEach(el=>{
-    el.onclick = ()=>{ state.projets = state.projets.filter(p=>p!==el.dataset.projetRemove); LS.set("projets", state.projets); state.openProjet=null; render(); };
+    el.onclick = async ()=>{ state.projets = state.projets.filter(p=>p!==el.dataset.projetRemove); await saveAppData("projets", state.projets); state.openProjet=null; render(); };
   });
 
   const saveSettingsBtn = document.getElementById("saveSettingsBtn");
-  if(saveSettingsBtn) saveSettingsBtn.onclick = ()=>{
+  if(saveSettingsBtn) saveSettingsBtn.onclick = async ()=>{
     state.settings.nomAsso = document.getElementById("setNomAsso").value.trim();
     state.settings.soldeInitial = Number(document.getElementById("setSolde").value) || 0;
-    LS.set("settings", state.settings);
+    await saveAppData("settings", state.settings);
     render();
   };
   document.querySelectorAll("[data-rm-produit]").forEach(el=>{
-    el.onclick = ()=>{ state.categories.produits = state.categories.produits.filter(x=>x!==el.dataset.rmProduit); LS.set("categories", state.categories); render(); };
+    el.onclick = async ()=>{ state.categories.produits = state.categories.produits.filter(x=>x!==el.dataset.rmProduit); await saveAppData("categories", state.categories); render(); };
   });
   document.querySelectorAll("[data-rm-charge]").forEach(el=>{
-    el.onclick = ()=>{ state.categories.charges = state.categories.charges.filter(x=>x!==el.dataset.rmCharge); LS.set("categories", state.categories); render(); };
+    el.onclick = async ()=>{ state.categories.charges = state.categories.charges.filter(x=>x!==el.dataset.rmCharge); await saveAppData("categories", state.categories); render(); };
   });
   const addProduitBtn = document.getElementById("addProduitBtn");
-  if(addProduitBtn) addProduitBtn.onclick = ()=>{
+  if(addProduitBtn) addProduitBtn.onclick = async ()=>{
     const input = document.getElementById("newProduit");
-    if(input.value.trim()){ state.categories.produits = [...state.categories.produits, input.value.trim()]; LS.set("categories", state.categories); render(); }
+    if(input.value.trim()){ state.categories.produits = [...state.categories.produits, input.value.trim()]; await saveAppData("categories", state.categories); render(); }
   };
   const addChargeBtn = document.getElementById("addChargeBtn");
-  if(addChargeBtn) addChargeBtn.onclick = ()=>{
+  if(addChargeBtn) addChargeBtn.onclick = async ()=>{
     const input = document.getElementById("newCharge");
-    if(input.value.trim()){ state.categories.charges = [...state.categories.charges, input.value.trim()]; LS.set("categories", state.categories); render(); }
-  };
-  const resetBtn = document.getElementById("resetBtn");
-  if(resetBtn) resetBtn.onclick = ()=>{
-    const zone = document.getElementById("resetZone");
-    zone.innerHTML = `<span class="text-sm" style="color:${BRICK}">Confirmer la suppression totale ?</span>
-      <button id="confirmResetBtn" class="ml-3 rounded-md px-3 py-1.5 text-sm font-semibold text-white" style="background:${BRICK}">Oui, supprimer</button>
-      <button id="cancelResetBtn" class="ml-2 text-sm text-slate-500">Annuler</button>`;
-    document.getElementById("confirmResetBtn").onclick = resetAll;
-    document.getElementById("cancelResetBtn").onclick = render;
+    if(input.value.trim()){ state.categories.charges = [...state.categories.charges, input.value.trim()]; await saveAppData("categories", state.categories); render(); }
   };
 }
 function focusSearch(){
@@ -787,7 +804,60 @@ function focusSearch(){
   if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
 
-render();
+let realtimeChannel = null;
+
+function showAuthScreen(){
+  document.getElementById("authScreen").classList.remove("hidden");
+  document.getElementById("appRoot").classList.add("hidden");
+  if(realtimeChannel){ db.removeChannel(realtimeChannel); realtimeChannel = null; }
+}
+
+async function onLoggedIn(session){
+  currentUserEmail = session.user.email;
+  document.getElementById("authScreen").classList.add("hidden");
+  document.getElementById("appRoot").classList.remove("hidden");
+  document.getElementById("userEmail").textContent = currentUserEmail;
+  await loadAll();
+  setupRealtime();
+}
+
+function setupRealtime(){
+  if(realtimeChannel) db.removeChannel(realtimeChannel);
+  realtimeChannel = db.channel("compta-sync")
+    .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, ()=>{ loadAll(); })
+    .on("postgres_changes", { event: "*", schema: "public", table: "app_data" }, ()=>{ loadAll(); })
+    .subscribe();
+}
+
+document.getElementById("loginForm").onsubmit = async (e)=>{
+  e.preventDefault();
+  const submitBtn = document.getElementById("loginSubmit");
+  const errEl = document.getElementById("loginError");
+  errEl.classList.add("hidden");
+  submitBtn.disabled = true; submitBtn.textContent = "Connexion...";
+  const email = document.getElementById("loginEmail").value.trim();
+  const password = document.getElementById("loginPassword").value;
+  const { error } = await db.auth.signInWithPassword({ email, password });
+  submitBtn.disabled = false; submitBtn.textContent = "Se connecter";
+  if(error){
+    errEl.textContent = "Connexion impossible : email ou mot de passe incorrect.";
+    errEl.classList.remove("hidden");
+  }
+};
+
+document.getElementById("logoutBtn").onclick = async ()=>{
+  await db.auth.signOut();
+};
+
+db.auth.onAuthStateChange((event, session)=>{
+  if(event === "SIGNED_IN" && session) onLoggedIn(session);
+  if(event === "SIGNED_OUT") showAuthScreen();
+});
+
+(async function init(){
+  const { data: { session } } = await db.auth.getSession();
+  if(session) onLoggedIn(session); else showAuthScreen();
+})();
 </script>
 </body>
 </html>
