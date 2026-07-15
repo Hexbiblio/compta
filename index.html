@@ -118,6 +118,12 @@ function fmtMontant(n){
 }
 function fmtDate(iso){ if(!iso) return ""; const [y,m,d]=iso.split("-"); return `${d}/${m}/${y}`; }
 function esc(s){ return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+const AUTRES_PRODUITS = "Autres recettes";
+const AUTRES_CHARGES = "Autres dépenses";
+function sortAutresLast(arr, autresLabel){
+  const others = arr.filter(x=>x!==autresLabel);
+  return arr.includes(autresLabel) ? [...others, autresLabel] : others;
+}
 
 function showWarning(msg){
   const el = document.getElementById("warning");
@@ -532,7 +538,10 @@ function renderParametres(){
   <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
     <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Comptes de produits (recettes)</h3>
     <div class="flex flex-wrap gap-2 mb-3">
-      ${c.produits.map(x=>`<span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style="background:rgba(169,121,31,0.12);color:${GOLD}">${esc(x)}<button data-rm-produit="${esc(x)}">✕</button></span>`).join("")}
+      ${sortAutresLast(c.produits, AUTRES_PRODUITS).map(x=>{
+        const locked = x===AUTRES_PRODUITS;
+        return `<span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style="background:rgba(169,121,31,0.12);color:${GOLD}">${esc(x)}${locked?'':`<button data-rm-produit="${esc(x)}">✕</button>`}</span>`;
+      }).join("")}
     </div>
     <div class="flex gap-2">
       <input id="newProduit" placeholder="Nouveau compte de recette" class="flex-1 px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff">
@@ -543,7 +552,10 @@ function renderParametres(){
   <section class="mb-6 rounded-xl p-5" style="background:${CARD};border:1px solid ${LINE}">
     <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Comptes de charges (dépenses)</h3>
     <div class="flex flex-wrap gap-2 mb-3">
-      ${c.charges.map(x=>`<span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style="background:rgba(156,62,51,0.12);color:${BRICK}">${esc(x)}<button data-rm-charge="${esc(x)}">✕</button></span>`).join("")}
+      ${sortAutresLast(c.charges, AUTRES_CHARGES).map(x=>{
+        const locked = x===AUTRES_CHARGES;
+        return `<span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs" style="background:rgba(156,62,51,0.12);color:${BRICK}">${esc(x)}${locked?'':`<button data-rm-charge="${esc(x)}">✕</button>`}</span>`;
+      }).join("")}
     </div>
     <div class="flex gap-2">
       <input id="newCharge" placeholder="Nouveau compte de dépense" class="flex-1 px-3 py-2 text-sm rounded-md" style="border:1px solid ${LINE};background:#fff">
@@ -884,7 +896,7 @@ function openForm(editingEntry){
   let photoRemoved = false;
 
   function fillCompteOptions(){
-    const opts = currentType==="recette" ? state.categories.produits : state.categories.charges;
+    const opts = currentType==="recette" ? sortAutresLast(state.categories.produits, AUTRES_PRODUITS) : sortAutresLast(state.categories.charges, AUTRES_CHARGES);
     const sel = document.getElementById("fCompteSel");
     sel.innerHTML = `<option value="">Choisir un compte...</option>` + opts.map(c=>`<option value="${esc(c)}" ${editingEntry?.compte===c?'selected':''}>${esc(c)}</option>`).join("");
   }
