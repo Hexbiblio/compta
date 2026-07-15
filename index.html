@@ -6,6 +6,7 @@
 <title>Compta Harmonie</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#EEF0E4; }
   .mono { font-family: "SFMono-Regular", Consolas, monospace; }
@@ -28,6 +29,10 @@
       <input required id="loginEmail" type="email" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid #D9D9C8;background:#fff">
       <label class="block text-xs mb-1 text-slate-500">Mot de passe</label>
       <input required id="loginPassword" type="password" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid #D9D9C8;background:#fff">
+      <label class="flex items-center gap-2 text-xs text-slate-600 mb-3">
+        <input type="checkbox" id="rememberMe" checked>
+        Rester connecté sur cet appareil
+      </label>
       <p id="loginError" class="text-xs mb-3 hidden" style="color:#9C3E33"></p>
       <button type="submit" id="loginSubmit" class="w-full rounded-lg py-2.5 text-sm font-semibold text-white" style="background:#24314A">Se connecter</button>
     </form>
@@ -52,6 +57,7 @@
       <button data-tab="dashboard" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Tableau de bord</button>
       <button data-tab="pieces" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Pièces</button>
       <button data-tab="projets" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Projets</button>
+      <button data-tab="documents" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Documents</button>
       <button data-tab="parametres" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Paramètres</button>
     </nav>
 
@@ -67,11 +73,25 @@
 </div>
 
 <script>
+const REMEMBER_KEY = "ch_remember_me";
+function getRemember(){ return localStorage.getItem(REMEMBER_KEY) === "1"; }
+function setRemember(v){ if(v) localStorage.setItem(REMEMBER_KEY, "1"); else localStorage.removeItem(REMEMBER_KEY); }
+const sessionStorageAdapter = {
+  getItem: (key) => localStorage.getItem(key) ?? sessionStorage.getItem(key),
+  setItem: (key, value) => {
+    if(getRemember()){ localStorage.setItem(key, value); sessionStorage.removeItem(key); }
+    else { sessionStorage.setItem(key, value); localStorage.removeItem(key); }
+  },
+  removeItem: (key) => { localStorage.removeItem(key); sessionStorage.removeItem(key); },
+};
+
 const SUPABASE_URL = "https://ddvbksalshoeufsvtpeg.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_x40Dv3dyfjqlPfVopsrHJQ_FeDp6fvV";
-const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { storage: sessionStorageAdapter, persistSession: true, autoRefreshToken: true }
+});
 
-const INK="#24314A", GOLD="#A9791F", BRICK="#9C3E33", LINE="#D9D9C8", CARD="#F8F9F1";
+const INK="#24314A", GOLD="#A9791F", BRICK="#9C3E33", LINE="#D9D9C8", CARD="#F8F9F1", INK_LINK="#24314A";
 
 const DEFAULT_CATEGORIES = {
   produits: [
@@ -188,7 +208,12 @@ let state = {
   tab: "dashboard",
   filters: { type:"tous", compte:"tous", projet:"tous", exercice: currentExercice(), search:"" },
   openProjet: null,
+  docPeriodType: "annuel",
+  docExercice: currentExercice(),
+  docMonth: new Date().toISOString().slice(0,7),
 };
+
+let chartInstances = {};
 
 async function loadAll(){
   setLoading(true);
@@ -350,8 +375,10 @@ function render(){
   if(state.tab==="dashboard") content.innerHTML = renderDashboard();
   if(state.tab==="pieces") content.innerHTML = renderPieces();
   if(state.tab==="projets") content.innerHTML = renderProjets();
+  if(state.tab==="documents") content.innerHTML = renderDocuments();
   if(state.tab==="parametres") content.innerHTML = renderParametres();
   attachContentEvents();
+  if(state.tab==="documents") renderDocumentsCharts();
 }
 
 function stampHtml(numero){
@@ -537,6 +564,274 @@ function renderParametres(){
   `;
 }
 
+/* ============================================================= */
+/* Documents comptables (compte de résultat, bilan, graphiques)    */
+/* ============================================================= */
+const MOIS_LABELS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+
+function monthBounds(yyyymm){
+  const [y,m] = yyyymm.split("-").map(Number);
+  const start = `${y}-${String(m).padStart(2,"0")}-01`;
+  const nextM = m===12 ? 1 : m+1;
+  const nextY = m===12 ? y+1 : y;
+  const endExclusive = `${nextY}-${String(nextM).padStart(2,"0")}-01`;
+  return { start, endExclusive };
+}
+function exerciceBounds(exercice){
+  const [y1,y2] = exercice.split("-").map(Number);
+  return { start: `${y1}-09-01`, endExclusive: `${y2}-09-01` };
+}
+function currentPeriodBounds(){
+  return state.docPeriodType === "annuel" ? exerciceBounds(state.docExercice) : monthBounds(state.docMonth);
+}
+function currentPeriodLabel(){
+  if(state.docPeriodType === "annuel") return `Exercice ${state.docExercice}`;
+  const [y,m] = state.docMonth.split("-").map(Number);
+  return `${MOIS_LABELS[m-1]} ${y}`;
+}
+function currentPeriodExercice(){
+  return state.docPeriodType === "annuel" ? state.docExercice : exerciceForDate(state.docMonth+"-01");
+}
+
+function entriesInRange(start, endExclusive){
+  return state.entries.filter(e => e.date >= start && e.date < endExclusive);
+}
+
+function computeCompteResultat(){
+  const { start, endExclusive } = currentPeriodBounds();
+  const es = entriesInRange(start, endExclusive);
+  const groupBy = (type)=>{
+    const map = {};
+    es.filter(e=>e.type===type).forEach(e=>{ map[e.compte] = (map[e.compte]||0) + Number(e.montant); });
+    return Object.entries(map).map(([compte,total])=>({compte,total})).sort((a,b)=>b.total-a.total);
+  };
+  const produits = groupBy("recette");
+  const charges = groupBy("depense");
+  const totalProduits = produits.reduce((s,x)=>s+x.total,0);
+  const totalCharges = charges.reduce((s,x)=>s+x.total,0);
+  return { produits, charges, totalProduits, totalCharges, resultat: totalProduits - totalCharges };
+}
+
+function computeBilan(){
+  const { start, endExclusive } = currentPeriodBounds();
+  const avant = state.entries.filter(e => e.date < start);
+  const rAvant = avant.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
+  const dAvant = avant.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
+  const soldeDebut = Number(state.settings.soldeInitial||0) + rAvant - dAvant;
+  const es = entriesInRange(start, endExclusive);
+  const totalR = es.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
+  const totalD = es.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
+  return { soldeDebut, totalR, totalD, soldeFin: soldeDebut + totalR - totalD };
+}
+
+function renderDocuments(){
+  const cr = computeCompteResultat();
+  const bl = computeBilan();
+  return `
+  <h2 class="text-xl font-bold mb-4" style="color:${INK}">Documents comptables</h2>
+
+  <div class="flex flex-wrap items-center gap-2 mb-6 rounded-xl p-3" style="background:${CARD};border:1px solid ${LINE}">
+    <div class="flex gap-1">
+      <button data-docperiod="annuel" class="docPeriodBtn px-3 py-1.5 text-xs font-semibold rounded-md">Annuel</button>
+      <button data-docperiod="mensuel" class="docPeriodBtn px-3 py-1.5 text-xs font-semibold rounded-md">Mensuel</button>
+    </div>
+    ${state.docPeriodType==="annuel" ? `
+      <select id="docExerciceSel" class="text-sm rounded-md px-2 py-1.5" style="border:1px solid ${LINE};background:#fff">
+        ${exercicesList().map(e=>`<option value="${e}" ${e===state.docExercice?"selected":""}>${e}</option>`).join("")}
+      </select>` : `
+      <input id="docMonthInput" type="month" value="${state.docMonth}" class="text-sm rounded-md px-2 py-1.5" style="border:1px solid ${LINE};background:#fff">`}
+    <button id="exportPdfBtn" class="ml-auto flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-semibold text-white" style="background:${INK}">⭳ Exporter en PDF</button>
+  </div>
+
+  <h3 class="text-sm font-semibold mb-2" style="color:${INK}">Compte de résultat — ${esc(currentPeriodLabel())}</h3>
+  <div class="rounded-xl overflow-hidden mb-3" style="border:1px solid ${LINE};background:${CARD}">
+    <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wide" style="color:${GOLD};border-bottom:1px solid ${LINE}">Produits (recettes)</div>
+    ${cr.produits.length===0 ? `<div class="px-4 py-3 text-sm text-slate-500">Aucune recette sur cette période</div>` :
+      cr.produits.map(x=>`<div class="flex justify-between px-4 py-2 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">${esc(x.compte)}</span><span class="mono font-medium" style="color:${GOLD}">${fmtMontant(x.total)}</span></div>`).join("")}
+    <div class="flex justify-between px-4 py-2.5 text-sm font-bold" style="background:rgba(169,121,31,0.08)"><span style="color:${INK}">Total produits</span><span class="mono" style="color:${GOLD}">${fmtMontant(cr.totalProduits)}</span></div>
+  </div>
+  <div class="rounded-xl overflow-hidden mb-3" style="border:1px solid ${LINE};background:${CARD}">
+    <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wide" style="color:${BRICK};border-bottom:1px solid ${LINE}">Charges (dépenses)</div>
+    ${cr.charges.length===0 ? `<div class="px-4 py-3 text-sm text-slate-500">Aucune dépense sur cette période</div>` :
+      cr.charges.map(x=>`<div class="flex justify-between px-4 py-2 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">${esc(x.compte)}</span><span class="mono font-medium" style="color:${BRICK}">${fmtMontant(x.total)}</span></div>`).join("")}
+    <div class="flex justify-between px-4 py-2.5 text-sm font-bold" style="background:rgba(156,62,51,0.08)"><span style="color:${INK}">Total charges</span><span class="mono" style="color:${BRICK}">${fmtMontant(cr.totalCharges)}</span></div>
+  </div>
+  <div class="rounded-xl p-4 mb-8 text-white flex justify-between items-center" style="background:${INK}">
+    <span class="text-sm font-semibold">Résultat net de la période</span>
+    <span class="text-xl font-bold mono">${cr.resultat>=0?'+':''}${fmtMontant(cr.resultat)}</span>
+  </div>
+
+  <h3 class="text-sm font-semibold mb-2" style="color:${INK}">Bilan simplifié (situation de trésorerie) — ${esc(currentPeriodLabel())}</h3>
+  <div class="rounded-xl overflow-hidden mb-2" style="border:1px solid ${LINE};background:${CARD}">
+    <div class="flex justify-between px-4 py-2.5 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">Solde de trésorerie en début de période</span><span class="mono font-medium" style="color:${INK}">${fmtMontant(bl.soldeDebut)}</span></div>
+    <div class="flex justify-between px-4 py-2.5 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">+ Recettes de la période</span><span class="mono font-medium" style="color:${GOLD}">${fmtMontant(bl.totalR)}</span></div>
+    <div class="flex justify-between px-4 py-2.5 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">− Dépenses de la période</span><span class="mono font-medium" style="color:${BRICK}">${fmtMontant(bl.totalD)}</span></div>
+    <div class="flex justify-between px-4 py-3 text-sm font-bold" style="background:rgba(36,49,74,0.06)"><span style="color:${INK}">= Solde de trésorerie en fin de période</span><span class="mono" style="color:${INK}">${fmtMontant(bl.soldeFin)}</span></div>
+  </div>
+  <p class="text-xs text-slate-500 mb-8">À noter : cet outil suit les entrées/sorties de trésorerie, pas les immobilisations ni les créances/dettes. Ce "bilan simplifié" reflète donc la trésorerie disponible, pas un bilan comptable complet au sens strict.</p>
+
+  <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Graphiques</h3>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="rounded-xl p-4" style="background:${CARD};border:1px solid ${LINE}">
+      <p class="text-xs font-semibold mb-2" style="color:${INK}">Évolution mensuelle — exercice ${esc(currentPeriodExercice())}</p>
+      <canvas id="chartEvolution" height="200"></canvas>
+      <button data-chart-download="chartEvolution" class="mt-2 text-xs font-medium" style="color:${INK_LINK}">⭳ Télécharger en PNG</button>
+    </div>
+    <div class="rounded-xl p-4" style="background:${CARD};border:1px solid ${LINE}">
+      <p class="text-xs font-semibold mb-2" style="color:${INK}">Solde de trésorerie cumulé</p>
+      <canvas id="chartSolde" height="200"></canvas>
+      <button data-chart-download="chartSolde" class="mt-2 text-xs font-medium" style="color:${INK_LINK}">⭳ Télécharger en PNG</button>
+    </div>
+    <div class="rounded-xl p-4" style="background:${CARD};border:1px solid ${LINE}">
+      <p class="text-xs font-semibold mb-2" style="color:${INK}">Répartition des dépenses — ${esc(currentPeriodLabel())}</p>
+      <canvas id="chartDepenses" height="200"></canvas>
+      <button data-chart-download="chartDepenses" class="mt-2 text-xs font-medium" style="color:${INK_LINK}">⭳ Télécharger en PNG</button>
+    </div>
+    <div class="rounded-xl p-4" style="background:${CARD};border:1px solid ${LINE}">
+      <p class="text-xs font-semibold mb-2" style="color:${INK}">Répartition des recettes — ${esc(currentPeriodLabel())}</p>
+      <canvas id="chartRecettes" height="200"></canvas>
+      <button data-chart-download="chartRecettes" class="mt-2 text-xs font-medium" style="color:${INK_LINK}">⭳ Télécharger en PNG</button>
+    </div>
+  </div>
+  `;
+}
+
+function destroyCharts(){
+  Object.values(chartInstances).forEach(c=>{ try{ c.destroy(); }catch(e){} });
+  chartInstances = {};
+}
+
+function renderDocumentsCharts(){
+  destroyCharts();
+  const ex = currentPeriodExercice();
+  const { start: exStart } = exerciceBounds(ex);
+  const monthLabelsOrdered = [];
+  const monthKeys = [];
+  let [sy, sm] = exStart.split("-").map(Number);
+  for(let i=0;i<12;i++){
+    monthKeys.push(`${sy}-${String(sm).padStart(2,"0")}`);
+    monthLabelsOrdered.push(MOIS_LABELS[sm-1].slice(0,3));
+    sm++; if(sm>12){ sm=1; sy++; }
+  }
+  const recettesParMois = monthKeys.map(k => state.entries.filter(e=>e.type==="recette" && e.date.slice(0,7)===k).reduce((s,e)=>s+Number(e.montant),0));
+  const depensesParMois = monthKeys.map(k => state.entries.filter(e=>e.type==="depense" && e.date.slice(0,7)===k).reduce((s,e)=>s+Number(e.montant),0));
+
+  const elEvo = document.getElementById("chartEvolution");
+  if(elEvo){
+    chartInstances.chartEvolution = new Chart(elEvo, {
+      type: "bar",
+      data: { labels: monthLabelsOrdered, datasets: [
+        { label: "Recettes", data: recettesParMois, backgroundColor: GOLD },
+        { label: "Dépenses", data: depensesParMois, backgroundColor: BRICK },
+      ]},
+      options: { responsive:true, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:10, font:{size:10} } } }, scales:{ y:{ ticks:{ font:{size:9} } }, x:{ ticks:{ font:{size:9} } } } }
+    });
+  }
+
+  const sorted = state.entries.slice().sort((a,b)=> a.date<b.date?-1:1);
+  let running = Number(state.settings.soldeInitial||0);
+  const soldeLabels = [], soldeData = [];
+  sorted.forEach(e=>{
+    running += e.type==="recette" ? Number(e.montant) : -Number(e.montant);
+    soldeLabels.push(fmtDate(e.date));
+    soldeData.push(running);
+  });
+  const elSolde = document.getElementById("chartSolde");
+  if(elSolde){
+    chartInstances.chartSolde = new Chart(elSolde, {
+      type: "line",
+      data: { labels: soldeLabels, datasets: [{ label:"Solde", data: soldeData, borderColor: INK, backgroundColor: "rgba(36,49,74,0.08)", fill:true, tension:0.15, pointRadius:0 }]},
+      options: { responsive:true, plugins:{ legend:{ display:false } }, scales:{ x:{ display: soldeLabels.length<15, ticks:{ font:{size:8} } }, y:{ ticks:{ font:{size:9} } } } }
+    });
+  }
+
+  const cr = computeCompteResultat();
+  const palette = ["#24314A","#A9791F","#9C3E33","#5C7A6B","#7A5C8A","#B5895A","#4A7A9C","#8A5C5C"];
+  const elDep = document.getElementById("chartDepenses");
+  if(elDep){
+    chartInstances.chartDepenses = new Chart(elDep, {
+      type: "doughnut",
+      data: { labels: cr.charges.map(x=>x.compte), datasets: [{ data: cr.charges.map(x=>x.total), backgroundColor: palette }]},
+      options: { responsive:true, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:10, font:{size:9} } } } }
+    });
+  }
+  const elRec = document.getElementById("chartRecettes");
+  if(elRec){
+    chartInstances.chartRecettes = new Chart(elRec, {
+      type: "doughnut",
+      data: { labels: cr.produits.map(x=>x.compte), datasets: [{ data: cr.produits.map(x=>x.total), backgroundColor: palette }]},
+      options: { responsive:true, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:10, font:{size:9} } } } }
+    });
+  }
+
+  document.querySelectorAll("[data-chart-download]").forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = btn.dataset.chartDownload;
+      const chart = chartInstances[id];
+      if(!chart) return;
+      const a = document.createElement("a");
+      a.href = chart.toBase64Image();
+      a.download = `${id}-${state.docPeriodType==='annuel'?state.docExercice:state.docMonth}.png`;
+      a.click();
+    };
+  });
+}
+
+function exportDocumentsPDF(){
+  const cr = computeCompteResultat();
+  const bl = computeBilan();
+  const label = currentPeriodLabel();
+  const asso = state.settings.nomAsso || "Harmonie municipale";
+  const rows = (arr,color)=> arr.map(x=>`<tr><td>${esc(x.compte)}</td><td style="text-align:right;color:${color}">${fmtMontant(x.total)}</td></tr>`).join("");
+  const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Documents comptables — ${esc(label)}</title>
+  <style>
+    body{font-family:Georgia,serif;color:#24314A;padding:30px;max-width:700px;margin:0 auto;}
+    h1{font-size:20px;margin-bottom:2px;} h2{font-size:13px;font-weight:normal;color:#4B5A75;margin-top:0;}
+    h3{font-size:14px;margin-top:28px;margin-bottom:8px;border-bottom:2px solid #24314A;padding-bottom:4px;}
+    table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}
+    td{padding:5px 4px;border-bottom:1px solid #D9D9C8;}
+    .total td{font-weight:bold;border-top:1.5px solid #24314A;border-bottom:none;}
+    .resultat{margin-top:14px;padding:10px 14px;background:#24314A;color:white;display:flex;justify-content:space-between;font-weight:bold;border-radius:6px;}
+    .note{font-size:11px;color:#4B5A75;margin-top:10px;}
+    @media print { body{padding:0;} }
+  </style></head><body>
+  <h1>${esc(asso)}</h1>
+  <h2>Documents comptables — ${esc(label)}</h2>
+
+  <h3>Compte de résultat</h3>
+  <table>
+    <tr><td colspan="2" style="font-weight:bold;color:#A9791F">Produits (recettes)</td></tr>
+    ${rows(cr.produits, "#A9791F") || '<tr><td colspan="2">Aucune recette</td></tr>'}
+    <tr class="total"><td>Total produits</td><td style="text-align:right">${fmtMontant(cr.totalProduits)}</td></tr>
+  </table>
+  <table>
+    <tr><td colspan="2" style="font-weight:bold;color:#9C3E33">Charges (dépenses)</td></tr>
+    ${rows(cr.charges, "#9C3E33") || '<tr><td colspan="2">Aucune dépense</td></tr>'}
+    <tr class="total"><td>Total charges</td><td style="text-align:right">${fmtMontant(cr.totalCharges)}</td></tr>
+  </table>
+  <div class="resultat"><span>Résultat net de la période</span><span>${cr.resultat>=0?'+':''}${fmtMontant(cr.resultat)}</span></div>
+
+  <h3>Bilan simplifié (situation de trésorerie)</h3>
+  <table>
+    <tr><td>Solde de trésorerie en début de période</td><td style="text-align:right">${fmtMontant(bl.soldeDebut)}</td></tr>
+    <tr><td>+ Recettes de la période</td><td style="text-align:right;color:#A9791F">${fmtMontant(bl.totalR)}</td></tr>
+    <tr><td>− Dépenses de la période</td><td style="text-align:right;color:#9C3E33">${fmtMontant(bl.totalD)}</td></tr>
+    <tr class="total"><td>Solde de trésorerie en fin de période</td><td style="text-align:right">${fmtMontant(bl.soldeFin)}</td></tr>
+  </table>
+  <p class="note">Ce document suit les entrées/sorties de trésorerie de l'association ; il ne constitue pas un bilan comptable complet au sens du plan comptable (pas de suivi des immobilisations, créances ou dettes).</p>
+  <p class="note">Document généré le ${fmtDate(new Date().toISOString().slice(0,10))}.</p>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorise les pop-ups pour ce site."); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ w.print(); }, 350);
+}
+
+/* ============================================================= */
+/* Modales                                                          */
+/* ============================================================= */
 function openForm(editingEntry){
   const isEdit = !!editingEntry;
   const type = editingEntry?.type || "depense";
@@ -798,6 +1093,20 @@ function attachContentEvents(){
     const input = document.getElementById("newCharge");
     if(input.value.trim()){ state.categories.charges = [...state.categories.charges, input.value.trim()]; await saveAppData("categories", state.categories); render(); }
   };
+
+  document.querySelectorAll(".docPeriodBtn").forEach(btn=>{
+    const active = btn.dataset.docperiod === state.docPeriodType;
+    btn.style.background = active ? INK : "#fff";
+    btn.style.color = active ? "#fff" : "#4B5A75";
+    btn.style.border = `1px solid ${active?INK:LINE}`;
+    btn.onclick = ()=>{ state.docPeriodType = btn.dataset.docperiod; render(); };
+  });
+  const docExerciceSel = document.getElementById("docExerciceSel");
+  if(docExerciceSel) docExerciceSel.onchange = ()=>{ state.docExercice = docExerciceSel.value; render(); };
+  const docMonthInput = document.getElementById("docMonthInput");
+  if(docMonthInput) docMonthInput.onchange = ()=>{ if(docMonthInput.value){ state.docMonth = docMonthInput.value; render(); } };
+  const exportPdfBtn = document.getElementById("exportPdfBtn");
+  if(exportPdfBtn) exportPdfBtn.onclick = exportDocumentsPDF;
 }
 function focusSearch(){
   const el = document.getElementById("fSearch");
@@ -835,6 +1144,7 @@ document.getElementById("loginForm").onsubmit = async (e)=>{
   const errEl = document.getElementById("loginError");
   errEl.classList.add("hidden");
   submitBtn.disabled = true; submitBtn.textContent = "Connexion...";
+  setRemember(document.getElementById("rememberMe").checked);
   const email = document.getElementById("loginEmail").value.trim();
   const password = document.getElementById("loginPassword").value;
   const { error } = await db.auth.signInWithPassword({ email, password });
