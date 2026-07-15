@@ -58,6 +58,8 @@
       <button data-tab="pieces" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Pièces</button>
       <button data-tab="projets" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Projets</button>
       <button data-tab="documents" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Documents</button>
+      <button data-tab="historique" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Historique</button>
+      <button data-tab="historique" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Historique</button>
       <button data-tab="parametres" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Paramètres</button>
     </nav>
 
@@ -206,6 +208,23 @@ async function saveAppData(key, value){
   return !error;
 }
 
+async function logAudit(action, description){
+  try{ await db.from("audit_log").insert({ user_email: currentUserEmail, action, description }); }
+  catch(e){ /* silencieux : l'historique ne doit jamais bloquer l'action principale */ }
+}
+async function loadAuditLog(){
+  state.auditLoading = true;
+  const { data, error } = await db.from("audit_log").select("*").order("created_at", { ascending: false }).limit(200);
+  state.auditLoading = false;
+  if(error){ showWarning("Erreur de chargement de l'historique : " + error.message); state.auditLog = []; }
+  else state.auditLog = data;
+  render();
+}
+function fmtDateTime(iso){
+  const d = new Date(iso);
+  return d.toLocaleString("fr-FR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" });
+}
+
 let state = {
   entries: [],
   categories: DEFAULT_CATEGORIES,
@@ -217,6 +236,8 @@ let state = {
   docPeriodType: "annuel",
   docExercice: currentExercice(),
   docMonth: new Date().toISOString().slice(0,7),
+  auditLog: [],
+  auditLoading: false,
 };
 
 let chartInstances = {};
@@ -364,6 +385,7 @@ async function handleImportCSV(file){
     });
     await saveAppData("categories", state.categories);
     await saveAppData("projets", state.projets);
+    if(toInsert.length) logAudit("import", `Import CSV : ${toInsert.length} pièce(s) ajoutée(s)`);
     await loadAll();
   }
   alert(`Import terminé : ${toInsert.length} pièce(s) ajoutée(s), ${skipped} ignorée(s) (déjà présentes ou illisibles).\n\nÀ savoir : les photos jointes aux pièces ne sont pas incluses dans un CSV.`);
@@ -382,9 +404,11 @@ function render(){
   if(state.tab==="pieces") content.innerHTML = renderPieces();
   if(state.tab==="projets") content.innerHTML = renderProjets();
   if(state.tab==="documents") content.innerHTML = renderDocuments();
+  if(state.tab==="historique") content.innerHTML = renderHistorique();
   if(state.tab==="parametres") content.innerHTML = renderParametres();
   attachContentEvents();
   if(state.tab==="documents") renderDocumentsCharts();
+  if(state.tab==="historique") loadAuditLog();
 }
 
 function stampHtml(numero){
@@ -518,6 +542,28 @@ function renderProjets(){
         </div>` : ""}
       </div>`;
     }).join("")}</div>`}
+  `;
+}
+
+function renderHistorique(){
+  if(state.auditLoading){
+    return `<h2 class="text-xl font-bold mb-4" style="color:${INK}">Historique des modifications</h2>
+    <p class="text-sm text-slate-500 py-8 text-center">Chargement...</p>`;
+  }
+  return `
+  <h2 class="text-xl font-bold mb-4" style="color:${INK}">Historique des modifications</h2>
+  ${state.auditLog.length===0 ? emptyHtml("Aucune modification enregistrée","L'historique se remplira au fur et à mesure des ajouts, modifications et suppressions.") :
+    `<div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
+      ${state.auditLog.map((a,i)=>`
+        <div class="px-4 py-3" style="${i>0?`border-top:1px solid ${LINE}`:""}">
+          <div class="flex justify-between items-start gap-3">
+            <span class="text-sm" style="color:${INK}">${esc(a.description)}</span>
+            <span class="text-xs text-slate-400 shrink-0 mono">${fmtDateTime(a.created_at)}</span>
+          </div>
+          <p class="text-xs text-slate-500 mt-0.5">${esc(a.user_email||"")}</p>
+        </div>`).join("")}
+    </div>
+    <p class="text-xs text-slate-500 mt-3">Les 200 dernières modifications sont affichées.</p>`}
   `;
 }
 
@@ -971,6 +1017,7 @@ function openForm(editingEntry){
     const photoValue = photoRemoved ? null : (photoData !== undefined ? photoData : undefined);
     const ok = await upsertEntryRemote(entry, photoValue);
     if(!ok) showWarning("Erreur lors de l'enregistrement — réessaie.");
+    else logAudit(isEdit ? "update" : "create", `${isEdit ? "Modification" : "Ajout"} de la pièce ${entry.numero} — ${entry.libelle} (${fmtMontant(entry.montant)})`);
     closeModal();
     await loadAll();
   };
@@ -1016,6 +1063,7 @@ function openDetail(entry){
     if(e.target.dataset.confirmed){
       const ok = await deleteEntryRemote(entry.id);
       if(!ok) showWarning("Erreur lors de la suppression.");
+      else logAudit("delete", `Suppression de la pièce ${entry.numero} — ${entry.libelle} (${fmtMontant(entry.montant)})`);
       closeModal(); await loadAll();
     } else {
       e.target.textContent = "Confirmer la suppression";
@@ -1028,7 +1076,11 @@ function openDetail(entry){
 function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
 
 document.querySelectorAll(".tab-btn").forEach(btn=>{
-  btn.onclick = ()=>{ state.tab = btn.dataset.tab; state.openProjet=null; render(); };
+  btn.onclick = ()=>{
+    state.tab = btn.dataset.tab; state.openProjet=null;
+    if(state.tab==="historique"){ render(); loadAuditLog(); }
+    else render();
+  };
 });
 document.getElementById("fabNew").onclick = ()=> openForm(null);
 
