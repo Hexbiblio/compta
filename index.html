@@ -338,6 +338,84 @@ function totalDotationExercice(exercice){
   }, 0));
 }
 
+function amortAtExercice(asset, exercice){
+  const sched = amortSchedule(asset);
+  const idx = sched.findIndex(r => r.exercice === exercice);
+  if(idx >= 0){
+    const { dotation, cumul, vnc } = sched[idx];
+    return { dotation, cumul, anterior: round2(cumul - dotation), vnc };
+  }
+  if(exercice < sched[0].exercice) return { dotation: 0, cumul: 0, anterior: 0, vnc: asset.valeurAchat };
+  const last = sched[sched.length-1];
+  return { dotation: 0, cumul: last.cumul, anterior: last.cumul, vnc: last.vnc };
+}
+
+function exportAmortissementsPDF(){
+  const exercice = state.amortExercice;
+  const asso = state.settings.nomAsso || "Harmonie municipale";
+  if(state.immobilisations.length===0){ alert("Aucune immobilisation enregistrée."); return; }
+
+  const rows = state.immobilisations.map(a => ({ a, info: amortAtExercice(a, exercice) }));
+  const sum = (fn) => round2(rows.reduce((s,r)=>s+fn(r),0));
+  const totalOrigine = sum(r=>r.a.valeurAchat);
+  const totalAnterieur = sum(r=>r.info.anterior);
+  const totalDotation = sum(r=>r.info.dotation);
+  const totalCumul = sum(r=>r.info.cumul);
+  const totalVnc = sum(r=>r.info.vnc);
+
+  const trs = rows.map(r => `<tr>
+    <td>${esc(r.a.designation)}</td>
+    <td>${fmtDate(r.a.dateAcquisition)}</td>
+    <td style="text-align:right">${fmtMontant(r.a.valeurAchat)}</td>
+    <td style="text-align:center">${r.a.dureeAnnees} an(s)</td>
+    <td style="text-align:right">${fmtMontant(r.info.anterior)}</td>
+    <td style="text-align:right">${fmtMontant(r.info.dotation)}</td>
+    <td style="text-align:right">${fmtMontant(r.info.cumul)}</td>
+    <td style="text-align:right">${fmtMontant(r.info.vnc)}</td>
+  </tr>`).join("");
+
+  const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Tableau des amortissements — ${esc(exercice)}</title>
+  <style>
+    @page { size: landscape; }
+    body{font-family:Georgia,serif;color:#24314A;padding:24px;margin:0 auto;}
+    h1{font-size:20px;margin-bottom:2px;} h2{font-size:13px;font-weight:normal;color:#4B5A75;margin-top:0;margin-bottom:18px;}
+    table{width:100%;border-collapse:collapse;font-size:11.5px;}
+    th{text-align:left;padding:6px 5px;border-bottom:2px solid #24314A;font-size:10px;text-transform:uppercase;color:#4B5A75;}
+    td{padding:6px 5px;border-bottom:1px solid #D9D9C8;}
+    tfoot td{font-weight:bold;border-top:1.5px solid #24314A;border-bottom:none;}
+    .note{font-size:11px;color:#4B5A75;margin-top:14px;}
+    @media print { body{padding:0;} }
+  </style></head><body>
+  <h1>${esc(asso)}</h1>
+  <h2>Tableau des amortissements — Exercice ${esc(exercice)}</h2>
+  <table>
+    <thead><tr>
+      <th>Désignation</th><th>Acquisition</th><th style="text-align:right">Valeur d'origine</th><th style="text-align:center">Durée</th>
+      <th style="text-align:right">Amort. antérieurs</th><th style="text-align:right">Dotation exercice</th>
+      <th style="text-align:right">Cumul</th><th style="text-align:right">VNC</th>
+    </tr></thead>
+    <tbody>${trs}</tbody>
+    <tfoot><tr>
+      <td colspan="2">Total</td>
+      <td style="text-align:right">${fmtMontant(totalOrigine)}</td>
+      <td></td>
+      <td style="text-align:right">${fmtMontant(totalAnterieur)}</td>
+      <td style="text-align:right">${fmtMontant(totalDotation)}</td>
+      <td style="text-align:right">${fmtMontant(totalCumul)}</td>
+      <td style="text-align:right">${fmtMontant(totalVnc)}</td>
+    </tr></tfoot>
+  </table>
+  <p class="note">Amortissement linéaire, calculé au prorata temporis sur l'exercice d'acquisition. Document généré le ${fmtDate(new Date().toISOString().slice(0,10))}.</p>
+  </body></html>`;
+
+  const w = window.open("", "_blank");
+  if(!w){ alert("Le navigateur a bloqué l'ouverture de la fenêtre d'impression. Autorise les pop-ups pour ce site."); return; }
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>{ w.print(); }, 350);
+}
+
 function nextNumero(type, exercice){
   const prefix = type==="recette" ? "R" : "D";
   const count = state.entries.filter(e=>e.type===type && e.exercice===exercice).length;
@@ -658,7 +736,10 @@ function renderAmortissements(){
   return `
   <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
     <h2 class="text-xl font-bold" style="color:${INK}">Amortissements</h2>
-    <button id="newImmoBtn" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white" style="background:${INK}">+ Nouvelle immobilisation</button>
+    <div class="flex gap-2">
+      <button id="exportAmortPdfBtn" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">⭳ Exporter le tableau (PDF)</button>
+      <button id="newImmoBtn" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white" style="background:${INK}">+ Nouvelle immobilisation</button>
+    </div>
   </div>
 
   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
@@ -1438,6 +1519,8 @@ function attachContentEvents(){
 
   const newImmoBtn = document.getElementById("newImmoBtn");
   if(newImmoBtn) newImmoBtn.onclick = ()=> openImmoForm(null);
+  const exportAmortPdfBtn = document.getElementById("exportAmortPdfBtn");
+  if(exportAmortPdfBtn) exportAmortPdfBtn.onclick = exportAmortissementsPDF;
   const amortExerciceSel = document.getElementById("amortExerciceSel");
   if(amortExerciceSel) amortExerciceSel.onchange = ()=>{ state.amortExercice = amortExerciceSel.value; render(); };
   document.querySelectorAll("[data-immo-toggle]").forEach(el=>{
