@@ -919,9 +919,27 @@ function computeBilan(){
   return { soldeDebut, totalR, totalD, soldeFin: soldeDebut + totalR - totalD };
 }
 
+function computeBilanComplet(){
+  const treso = computeBilan();
+  const ex = currentPeriodExercice();
+  const exEnd = exerciceBounds(ex).endExclusive;
+  const relevantAssets = state.immobilisations.filter(a => a.dateAcquisition < exEnd);
+  let immoBrut = 0, immoCumul = 0;
+  relevantAssets.forEach(a=>{
+    const info = amortAtExercice(a, ex);
+    immoBrut += a.valeurAchat;
+    immoCumul += info.cumul;
+  });
+  immoBrut = round2(immoBrut);
+  immoCumul = round2(immoCumul);
+  const immoNet = round2(immoBrut - immoCumul);
+  const totalActif = round2(immoNet + treso.soldeFin);
+  return { immoBrut, immoCumul, immoNet, treso: treso.soldeFin, totalActif, fondsAssociatifs: totalActif };
+}
+
 function renderDocuments(){
   const cr = computeCompteResultat();
-  const bl = computeBilan();
+  const bc = computeBilanComplet();
   return `
   <h2 class="text-xl font-bold mb-4" style="color:${INK}">Documents comptables</h2>
 
@@ -956,14 +974,23 @@ function renderDocuments(){
     <span class="text-xl font-bold mono">${cr.resultat>=0?'+':''}${fmtMontant(cr.resultat)}</span>
   </div>
 
-  <h3 class="text-sm font-semibold mb-2" style="color:${INK}">Bilan simplifié (situation de trésorerie) — ${esc(currentPeriodLabel())}</h3>
-  <div class="rounded-xl overflow-hidden mb-2" style="border:1px solid ${LINE};background:${CARD}">
-    <div class="flex justify-between px-4 py-2.5 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">Solde de trésorerie en début de période</span><span class="mono font-medium" style="color:${INK}">${fmtMontant(bl.soldeDebut)}</span></div>
-    <div class="flex justify-between px-4 py-2.5 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">+ Recettes de la période</span><span class="mono font-medium" style="color:${GOLD}">${fmtMontant(bl.totalR)}</span></div>
-    <div class="flex justify-between px-4 py-2.5 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">− Dépenses de la période</span><span class="mono font-medium" style="color:${BRICK}">${fmtMontant(bl.totalD)}</span></div>
-    <div class="flex justify-between px-4 py-3 text-sm font-bold" style="background:rgba(36,49,74,0.06)"><span style="color:${INK}">= Solde de trésorerie en fin de période</span><span class="mono" style="color:${INK}">${fmtMontant(bl.soldeFin)}</span></div>
+  <h3 class="text-sm font-semibold mb-2" style="color:${INK}">Bilan — ${esc(currentPeriodLabel())}</h3>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+    <div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
+      <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wide" style="color:${INK};border-bottom:1px solid ${LINE}">Actif</div>
+      <div class="flex justify-between px-4 py-2 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">Immobilisations (valeur brute)</span><span class="mono" style="color:${INK}">${fmtMontant(bc.immoBrut)}</span></div>
+      <div class="flex justify-between px-4 py-2 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">− Amortissements cumulés</span><span class="mono" style="color:${BRICK}">${fmtMontant(bc.immoCumul)}</span></div>
+      <div class="flex justify-between px-4 py-2 text-sm font-semibold" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">= Immobilisations nettes</span><span class="mono" style="color:${INK}">${fmtMontant(bc.immoNet)}</span></div>
+      <div class="flex justify-between px-4 py-2 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">Disponibilités (trésorerie)</span><span class="mono" style="color:${GOLD}">${fmtMontant(bc.treso)}</span></div>
+      <div class="flex justify-between px-4 py-3 text-sm font-bold" style="background:rgba(36,49,74,0.06)"><span style="color:${INK}">Total actif</span><span class="mono" style="color:${INK}">${fmtMontant(bc.totalActif)}</span></div>
+    </div>
+    <div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
+      <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wide" style="color:${INK};border-bottom:1px solid ${LINE}">Passif</div>
+      <div class="flex justify-between px-4 py-2 text-sm" style="border-bottom:1px solid ${LINE}"><span style="color:${INK}">Fonds associatifs</span><span class="mono" style="color:${INK}">${fmtMontant(bc.fondsAssociatifs)}</span></div>
+      <div class="flex justify-between px-4 py-3 text-sm font-bold" style="background:rgba(36,49,74,0.06)"><span style="color:${INK}">Total passif</span><span class="mono" style="color:${INK}">${fmtMontant(bc.fondsAssociatifs)}</span></div>
+    </div>
   </div>
-  <p class="text-xs text-slate-500 mb-8">À noter : cet outil suit les entrées/sorties de trésorerie, pas les immobilisations ni les créances/dettes. Ce "bilan simplifié" reflète donc la trésorerie disponible, pas un bilan comptable complet au sens strict.</p>
+  <p class="text-xs text-slate-500 mb-8">À noter : ce bilan intègre la trésorerie et les immobilisations (amortissements inclus), mais ne suit pas de créances ni de dettes — s'il en existe, elles n'apparaissent pas ici. Les fonds associatifs correspondent donc à la valeur nette connue de l'association (trésorerie + immobilisations nettes). En période mensuelle, la partie immobilisations reflète la situation en fin d'exercice, pas au jour près du mois choisi.</p>
 
   <h3 class="text-sm font-semibold mb-3" style="color:${INK}">Graphiques</h3>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -1074,7 +1101,7 @@ function renderDocumentsCharts(){
 
 function exportDocumentsPDF(){
   const cr = computeCompteResultat();
-  const bl = computeBilan();
+  const bc = computeBilanComplet();
   const label = currentPeriodLabel();
   const asso = state.settings.nomAsso || "Harmonie municipale";
   const rows = (arr,color)=> arr.map(x=>`<tr><td>${esc(x.compte)}</td><td style="text-align:right;color:${color}">${fmtMontant(x.total)}</td></tr>`).join("");
@@ -1106,14 +1133,21 @@ function exportDocumentsPDF(){
   </table>
   <div class="resultat"><span>Résultat net de la période</span><span>${cr.resultat>=0?'+':''}${fmtMontant(cr.resultat)}</span></div>
 
-  <h3>Bilan simplifié (situation de trésorerie)</h3>
+  <h3>Bilan — ${esc(label)}</h3>
   <table>
-    <tr><td>Solde de trésorerie en début de période</td><td style="text-align:right">${fmtMontant(bl.soldeDebut)}</td></tr>
-    <tr><td>+ Recettes de la période</td><td style="text-align:right;color:#A9791F">${fmtMontant(bl.totalR)}</td></tr>
-    <tr><td>− Dépenses de la période</td><td style="text-align:right;color:#9C3E33">${fmtMontant(bl.totalD)}</td></tr>
-    <tr class="total"><td>Solde de trésorerie en fin de période</td><td style="text-align:right">${fmtMontant(bl.soldeFin)}</td></tr>
+    <tr><td colspan="2" style="font-weight:bold">Actif</td></tr>
+    <tr><td>Immobilisations (valeur brute)</td><td style="text-align:right">${fmtMontant(bc.immoBrut)}</td></tr>
+    <tr><td>− Amortissements cumulés</td><td style="text-align:right;color:#9C3E33">${fmtMontant(bc.immoCumul)}</td></tr>
+    <tr><td>= Immobilisations nettes</td><td style="text-align:right">${fmtMontant(bc.immoNet)}</td></tr>
+    <tr><td>Disponibilités (trésorerie)</td><td style="text-align:right;color:#A9791F">${fmtMontant(bc.treso)}</td></tr>
+    <tr class="total"><td>Total actif</td><td style="text-align:right">${fmtMontant(bc.totalActif)}</td></tr>
   </table>
-  <p class="note">Ce document suit les entrées/sorties de trésorerie de l'association ; il ne constitue pas un bilan comptable complet au sens du plan comptable (pas de suivi des immobilisations, créances ou dettes).</p>
+  <table>
+    <tr><td colspan="2" style="font-weight:bold">Passif</td></tr>
+    <tr><td>Fonds associatifs</td><td style="text-align:right">${fmtMontant(bc.fondsAssociatifs)}</td></tr>
+    <tr class="total"><td>Total passif</td><td style="text-align:right">${fmtMontant(bc.fondsAssociatifs)}</td></tr>
+  </table>
+  <p class="note">Ce bilan intègre la trésorerie et les immobilisations (amortissements inclus), mais ne suit pas de créances ni de dettes — s'il en existe, elles n'apparaissent pas ici. En période mensuelle, la partie immobilisations reflète la situation en fin d'exercice, pas au jour près du mois choisi.</p>
   <p class="note">Document généré le ${fmtDate(new Date().toISOString().slice(0,10))}.</p>
   </body></html>`;
   const w = window.open("", "_blank");
