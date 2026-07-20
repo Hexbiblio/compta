@@ -57,6 +57,7 @@
       <button data-tab="dashboard" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Tableau de bord</button>
       <button data-tab="pieces" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Pièces</button>
       <button data-tab="projets" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Projets</button>
+      <button data-tab="caisse" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Caisse</button>
       <button data-tab="documents" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Documents</button>
       <button data-tab="amortissements" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Amortissements</button>
       <button data-tab="parametres" class="tab-btn px-3 py-2 text-sm font-semibold rounded-lg whitespace-nowrap">Paramètres</button>
@@ -98,16 +99,18 @@ const DEFAULT_CATEGORIES = {
   produits: [
     "Cotisations des musiciens / adhérents","Subvention municipale","Subventions (région, département, autres)",
     "Recettes de concerts (billetterie)","Sponsoring et partenariats","Dons",
-    "Vente de goodies / programmes","Buvette et restauration lors des événements","Autres recettes"
+    "Vente de goodies / programmes","Buvette et restauration lors des événements","Dépôt en banque","Autres recettes"
   ],
   charges: [
     "Achat d'instruments","Entretien et réparation d'instruments","Achat de partitions",
     "Location de salle / de matériel","Cachets intervenants / chef d'orchestre","Assurance",
     "Déplacements et transport (concerts, festivals)","Tenues et uniformes",
-    "Affiliation fédération musicale","Communication et affiches","Autres dépenses"
+    "Affiliation fédération musicale","Communication et affiches","Dépôt en banque","Autres dépenses"
   ]
 };
+const TRANSFERT_COMPTE = "Dépôt en banque";
 const PAIEMENTS = ["Espèces","Chèque","Virement","Carte bancaire","Prélèvement"];
+const PAIEMENTS_BANQUE = PAIEMENTS.filter(p => p !== "Espèces");
 
 function exerciceForDate(iso){
   const [y,m] = iso.split("-").map(Number);
@@ -162,14 +165,14 @@ let currentUserEmail = "";
 
 async function fetchEntriesList(){
   const { data, error } = await db.from("entries")
-    .select("id,numero,exercice,type,date,libelle,montant,compte,projet,moyen_paiement,notes,has_photo,created_by")
+    .select("id,numero,exercice,type,date,libelle,montant,compte,projet,moyen_paiement,notes,has_photo,created_by,est_transfert")
     .order("date", { ascending: false });
   if(error){ showWarning("Erreur de chargement des pièces : " + error.message); return []; }
   return data.map(r => ({
     id: r.id, numero: r.numero, exercice: r.exercice, type: r.type, date: r.date,
     libelle: r.libelle, montant: r.montant, compte: r.compte, projet: r.projet || "",
     moyenPaiement: r.moyen_paiement || "", notes: r.notes || "", hasPhoto: !!r.has_photo,
-    createdBy: r.created_by || "",
+    createdBy: r.created_by || "", estTransfert: !!r.est_transfert,
   }));
 }
 
@@ -184,7 +187,7 @@ async function upsertEntryRemote(entry, photoValue){
     id: entry.id, numero: entry.numero, exercice: entry.exercice, type: entry.type,
     date: entry.date, libelle: entry.libelle, montant: entry.montant, compte: entry.compte,
     projet: entry.projet || "", moyen_paiement: entry.moyenPaiement || "", notes: entry.notes || "",
-    has_photo: entry.hasPhoto, created_by: currentUserEmail,
+    has_photo: entry.hasPhoto, created_by: currentUserEmail, est_transfert: !!entry.estTransfert,
   };
   if(photoValue !== undefined) row.photo = photoValue;
   const { error } = await db.from("entries").upsert(row);
@@ -219,9 +222,9 @@ let state = {
   entries: [],
   categories: DEFAULT_CATEGORIES,
   projets: [],
-  settings: { nomAsso: "", soldeInitial: 0 },
+  settings: { nomAsso: "", soldeInitial: 0, soldeInitialEspeces: 0 },
   tab: "dashboard",
-  filters: { type:"tous", compte:"tous", projet:"tous", exercice: currentExercice(), search:"" },
+  filters: { type:"tous", compte:"tous", projet:"tous", moyen:"tous", exercice: currentExercice(), search:"" },
   openProjet: null,
   docPeriodType: "annuel",
   docExercice: currentExercice(),
@@ -230,6 +233,7 @@ let state = {
   amortExercice: currentExercice(),
   amortOpenId: null,
   comptesAmortissables: [],
+  caisseExercice: "toutes",
 };
 
 let chartInstances = {};
@@ -240,7 +244,7 @@ async function loadAll(){
     fetchEntriesList(),
     loadAppData("categories", DEFAULT_CATEGORIES),
     loadAppData("projets", []),
-    loadAppData("settings", { nomAsso: "", soldeInitial: 0 }),
+    loadAppData("settings", { nomAsso: "", soldeInitial: 0, soldeInitialEspeces: 0 }),
     fetchImmobilisations(),
     loadAppData("comptesAmortissables", ["Achat d'instruments", "Matériel et équipement"]),
   ]);
@@ -250,6 +254,10 @@ async function loadAll(){
   state.settings = settings;
   state.immobilisations = immobilisations;
   state.comptesAmortissables = comptesAmortissables;
+  let categoriesChanged = false;
+  if(!state.categories.produits.includes(TRANSFERT_COMPTE)){ state.categories.produits = [...state.categories.produits, TRANSFERT_COMPTE]; categoriesChanged = true; }
+  if(!state.categories.charges.includes(TRANSFERT_COMPTE)){ state.categories.charges = [...state.categories.charges, TRANSFERT_COMPTE]; categoriesChanged = true; }
+  if(categoriesChanged) await saveAppData("categories", state.categories);
   setLoading(false);
   render();
 }
@@ -420,6 +428,14 @@ function soldeGlobal(){
   const d = state.entries.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
   return Number(state.settings.soldeInitial||0) + r - d;
 }
+function soldeCaisseEspeces(){
+  const r = state.entries.filter(e=>e.type==="recette" && e.moyenPaiement==="Espèces").reduce((s,e)=>s+Number(e.montant),0);
+  const d = state.entries.filter(e=>e.type==="depense" && e.moyenPaiement==="Espèces").reduce((s,e)=>s+Number(e.montant),0);
+  return round2(Number(state.settings.soldeInitialEspeces||0) + r - d);
+}
+function mouvementsEspecesRecents(n){
+  return state.entries.filter(e=>e.moyenPaiement==="Espèces").sort((a,b)=>a.date<b.date?1:-1).slice(0, n||8);
+}
 function totauxExercice(ex){
   const es = state.entries.filter(e=> ex==="toutes" || e.exercice===ex);
   const r = es.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
@@ -433,6 +449,7 @@ function filteredEntries(){
     .filter(e=> f.type==="tous" || e.type===f.type)
     .filter(e=> f.compte==="tous" || e.compte===f.compte)
     .filter(e=> f.projet==="tous" || e.projet===f.projet)
+    .filter(e=> f.moyen==="tous" || e.moyenPaiement===f.moyen)
     .filter(e=>{
       if(!f.search.trim()) return true;
       const q=f.search.toLowerCase();
@@ -549,6 +566,7 @@ function render(){
   if(state.tab==="dashboard") content.innerHTML = renderDashboard();
   if(state.tab==="pieces") content.innerHTML = renderPieces();
   if(state.tab==="projets") content.innerHTML = renderProjets();
+  if(state.tab==="caisse") content.innerHTML = renderCaisse();
   if(state.tab==="documents") content.innerHTML = renderDocuments();
   if(state.tab==="amortissements") content.innerHTML = renderAmortissements();
   if(state.tab==="parametres") content.innerHTML = renderParametres();
@@ -596,6 +614,28 @@ function renderDashboard(){
       <p class="mt-2 text-2xl font-semibold mono" style="color:${BRICK}">${fmtMontant(t.d)}</p>
     </div>
   </div>
+  <h3 class="text-sm font-semibold mb-2 flex items-center gap-2" style="color:${INK}">💶 Caisse espèces <span class="text-xs font-normal text-slate-500">— suivi en temps réel</span></h3>
+  <div class="rounded-xl p-5 mb-8 flex items-center justify-between flex-wrap gap-3" style="background:rgba(169,121,31,0.10);border:1px solid rgba(169,121,31,0.35)">
+    <div>
+      <p class="text-xs uppercase tracking-wide" style="color:${GOLD}">Solde actuel de la caisse</p>
+      <p class="mt-1 text-3xl font-bold mono" style="color:${INK}">${fmtMontant(soldeCaisseEspeces())}</p>
+    </div>
+    <div class="text-right">
+      <p class="text-xs text-slate-500">Basé sur les pièces réglées "Espèces"</p>
+      <p class="text-xs text-slate-500">Mis à jour automatiquement à chaque ajout</p>
+    </div>
+  </div>
+  ${mouvementsEspecesRecents(6).length>0 ? `
+  <p class="text-xs font-medium mb-2" style="color:#4B5A75">Derniers mouvements en espèces</p>
+  <div class="rounded-xl overflow-hidden mb-8" style="border:1px solid ${LINE};background:${CARD}">
+    ${mouvementsEspecesRecents(6).map((e,i)=>`
+      <button data-open="${e.id}" class="entry-row w-full flex items-center gap-3 px-4 py-2.5 text-left" style="${i>0?`border-top:1px solid ${LINE}`:""}">
+        <span class="text-xs w-16 shrink-0 mono text-slate-500">${fmtDate(e.date)}</span>
+        <span class="flex-1 min-w-0 text-sm truncate" style="color:${INK}">${esc(e.libelle)}</span>
+        <span class="text-sm font-semibold mono" style="color:${e.type==='recette'?GOLD:BRICK}">${e.type==='recette'?'+':'−'} ${fmtMontant(e.montant)}</span>
+      </button>`).join("")}
+  </div>` : ""}
+
   <h3 class="text-sm font-semibold mb-2" style="color:${INK}">Dernières pièces</h3>
   ${recents.length===0 ? emptyHtml("Aucune pièce enregistrée","Ajoute ton premier reçu ou facture.") :
     `<div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
@@ -690,6 +730,66 @@ function renderProjets(){
   `;
 }
 
+function renderCaisse(){
+  const ex = state.caisseExercice;
+  let startingBalance;
+  let list;
+  if(ex === "toutes"){
+    startingBalance = Number(state.settings.soldeInitialEspeces||0);
+    list = state.entries.filter(e=>e.moyenPaiement==="Espèces");
+  } else {
+    const { start, endExclusive } = exerciceBounds(ex);
+    const avant = state.entries.filter(e=>e.moyenPaiement==="Espèces" && e.date < start);
+    const rAvant = avant.filter(e=>e.type==="recette").reduce((s,e)=>s+Number(e.montant),0);
+    const dAvant = avant.filter(e=>e.type==="depense").reduce((s,e)=>s+Number(e.montant),0);
+    startingBalance = round2(Number(state.settings.soldeInitialEspeces||0) + rAvant - dAvant);
+    list = state.entries.filter(e=>e.moyenPaiement==="Espèces" && e.date >= start && e.date < endExclusive);
+  }
+  list = list.slice().sort((a,b)=> a.date<b.date ? -1 : (a.date>b.date ? 1 : 0));
+  let running = startingBalance;
+  const rows = list.map(e=>{
+    running = round2(running + (e.type==="recette" ? Number(e.montant) : -Number(e.montant)));
+    return { ...e, running };
+  });
+  const soldeActuel = soldeCaisseEspeces();
+
+  return `
+  <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
+    <h2 class="text-xl font-bold" style="color:${INK}">Caisse espèces</h2>
+    <div class="flex gap-2 items-center">
+      <select id="caisseExerciceSel" class="text-sm rounded-md px-2 py-1.5" style="border:1px solid ${LINE};background:${CARD}">
+        <option value="toutes" ${ex==="toutes"?"selected":""}>Toutes les années</option>
+        ${exercicesList().map(e=>`<option value="${e}" ${e===ex?"selected":""}>${e}</option>`).join("")}
+      </select>
+      <button id="depotBanqueBtn" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white" style="background:${INK}">💰 Déposer en banque</button>
+    </div>
+  </div>
+
+  <div class="rounded-xl p-5 mb-6 flex items-center justify-between flex-wrap gap-3" style="background:rgba(169,121,31,0.10);border:1px solid rgba(169,121,31,0.35)">
+    <div>
+      <p class="text-xs uppercase tracking-wide" style="color:${GOLD}">Solde actuel de la caisse (temps réel)</p>
+      <p class="mt-1 text-3xl font-bold mono" style="color:${INK}">${fmtMontant(soldeActuel)}</p>
+    </div>
+    <p class="text-xs text-slate-500 max-w-xs text-right">Ce solde reflète toutes les pièces enregistrées avec le moyen de paiement "Espèces", quel que soit le filtre d'année ci-dessus.</p>
+  </div>
+
+  <p class="text-xs font-medium mb-2" style="color:#4B5A75">Solde de caisse en début de période sélectionnée : <span class="mono font-semibold" style="color:${INK}">${fmtMontant(startingBalance)}</span></p>
+
+  ${rows.length===0 ? emptyHtml("Aucun mouvement en espèces","Les pièces réglées en espèces apparaîtront ici avec le solde de caisse qui court.") :
+    `<div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
+      ${rows.map((e,i)=>`
+        <button data-open="${e.id}" class="entry-row w-full flex items-center gap-3 px-4 py-2.5 text-left" style="${i>0?`border-top:1px solid ${LINE}`:""}">
+          <span class="text-xs w-16 shrink-0 mono text-slate-500">${fmtDate(e.date)}</span>
+          ${stampHtml(e.numero)}
+          <span class="flex-1 min-w-0 text-sm truncate hidden sm:block" style="color:${INK}">${esc(e.libelle)}</span>
+          <span class="text-sm font-semibold w-24 text-right shrink-0 mono" style="color:${e.type==='recette'?GOLD:BRICK}">${e.type==='recette'?'+':'−'} ${fmtMontant(e.montant)}</span>
+          <span class="text-sm font-bold w-24 text-right shrink-0 mono" style="color:${INK}">${fmtMontant(e.running)}</span>
+        </button>`).join("")}
+    </div>
+    <p class="text-xs text-slate-500 mt-2 text-right">Dernière colonne : solde de caisse après chaque mouvement.</p>`}
+  `;
+}
+
 function renderAmortissements(){
   const totalEx = totalDotationExercice(state.amortExercice);
   const totalVNC = round2(state.immobilisations.reduce((s,a)=>{
@@ -766,6 +866,8 @@ function renderParametres(){
     <input id="setNomAsso" value="${esc(state.settings.nomAsso)}" placeholder="Harmonie municipale de..." class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
     <label class="block text-xs mb-1 text-slate-500">Solde initial (€)</label>
     <input id="setSolde" type="number" step="0.01" value="${esc(state.settings.soldeInitial)}" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+    <label class="block text-xs mb-1 text-slate-500">Solde initial de caisse — espèces (€)</label>
+    <input id="setSoldeEspeces" type="number" step="0.01" value="${esc(state.settings.soldeInitialEspeces)}" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
     <button id="saveSettingsBtn" class="rounded-md px-4 py-2 text-sm font-semibold text-white" style="background:${INK}">Enregistrer</button>
   </section>
 
@@ -861,7 +963,7 @@ function computeCompteResultat(){
   const es = entriesInRange(start, endExclusive);
   const groupBy = (type)=>{
     const map = {};
-    es.filter(e=>e.type===type).forEach(e=>{ map[e.compte] = (map[e.compte]||0) + Number(e.montant); });
+    es.filter(e=>e.type===type && !e.estTransfert).forEach(e=>{ map[e.compte] = (map[e.compte]||0) + Number(e.montant); });
     return Object.entries(map).map(([compte,total])=>({compte,total})).sort((a,b)=>b.total-a.total);
   };
   const produits = groupBy("recette");
@@ -1305,7 +1407,7 @@ function openDetail(entry){
   <div class="fixed inset-0 z-40 flex items-end md:items-center justify-center modal-bg" id="detailOverlay">
     <div class="w-full md:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl md:rounded-2xl p-5" style="background:#EEF0E4">
       <div class="flex items-start justify-between mb-4">
-        <div>${stampHtml(entry.numero)}<div class="mt-2">${badgeHtml(entry.type)}</div></div>
+        <div>${stampHtml(entry.numero)}<div class="mt-2 flex items-center gap-2">${badgeHtml(entry.type)}${entry.estTransfert?`<span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold" style="background:rgba(36,49,74,0.10);color:${INK}">🔁 Transfert interne</span>`:''}</div></div>
         <button id="closeDetail" class="text-slate-500 text-xl">✕</button>
       </div>
       <h3 class="text-lg font-bold mb-1" style="color:${INK}">${esc(entry.libelle)}</h3>
@@ -1351,6 +1453,80 @@ function openDetail(entry){
 }
 
 function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
+
+function openDepotBanqueForm(){
+  const soldeActuel = soldeCaisseEspeces();
+  document.getElementById("modalRoot").innerHTML = `
+  <div class="fixed inset-0 z-40 flex items-end md:items-center justify-center modal-bg" id="depotOverlay">
+    <form id="depotForm" class="w-full md:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl md:rounded-2xl p-5" style="background:#EEF0E4">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-bold" style="color:${INK}">💰 Dépôt de caisse vers la banque</h3>
+        <button type="button" id="closeDepotForm" class="text-slate-500 text-xl">✕</button>
+      </div>
+      <p class="text-xs text-slate-500 mb-3">Solde actuel de la caisse : <span class="font-semibold mono" style="color:${INK}">${fmtMontant(soldeActuel)}</span></p>
+      <label class="block text-xs mb-1 text-slate-500">Date</label>
+      <input required id="depotDate" type="date" value="${new Date().toISOString().slice(0,10)}" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+      <label class="block text-xs mb-1 text-slate-500">Montant déposé (€)</label>
+      <input required id="depotMontant" type="number" min="0.01" step="0.01" max="${soldeActuel}" value="${soldeActuel>0?soldeActuel:''}" class="w-full px-3 py-2 text-sm rounded-md mb-1" style="border:1px solid ${LINE};background:#fff">
+      <p id="depotError" class="text-xs mb-2 hidden" style="color:${BRICK}">Le montant ne peut pas dépasser le solde actuel de la caisse.</p>
+      <label class="block text-xs mb-1 text-slate-500">Moyen de réception en banque</label>
+      <select id="depotMoyen" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff">
+        ${PAIEMENTS_BANQUE.map(p=>`<option value="${p}">${p}</option>`).join("")}
+      </select>
+      <label class="block text-xs mb-1 text-slate-500">Notes (optionnel)</label>
+      <textarea id="depotNotes" rows="2" placeholder="Ex : Dépôt du ${fmtDate(new Date().toISOString().slice(0,10))}" class="w-full px-3 py-2 text-sm rounded-md mb-3" style="border:1px solid ${LINE};background:#fff"></textarea>
+      <p class="text-xs text-slate-500 mb-3">Ceci créera deux pièces liées : une sortie de caisse (espèces) et une entrée en banque, toutes deux sur le compte "${TRANSFERT_COMPTE}". Ce mouvement n'affecte pas ton résultat comptable — c'est un simple transfert.</p>
+      <div class="flex gap-2 mt-2">
+        <button type="button" id="cancelDepotForm" class="flex-1 rounded-lg py-2.5 text-sm font-semibold" style="border:1px solid ${LINE};color:${INK}">Annuler</button>
+        <button type="submit" id="submitDepotForm" class="flex-1 rounded-lg py-2.5 text-sm font-semibold text-white" style="background:${INK}">Enregistrer le dépôt</button>
+      </div>
+    </form>
+  </div>`;
+
+  document.getElementById("closeDepotForm").onclick = closeModal;
+  document.getElementById("cancelDepotForm").onclick = closeModal;
+  document.getElementById("depotOverlay").onclick = (e)=>{ if(e.target.id==="depotOverlay") closeModal(); };
+
+  document.getElementById("depotForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const montant = Number(document.getElementById("depotMontant").value);
+    const errEl = document.getElementById("depotError");
+    if(!montant || montant <= 0 || montant > soldeActuel + 0.001){ errEl.classList.remove("hidden"); return; }
+    errEl.classList.add("hidden");
+    const date = document.getElementById("depotDate").value;
+    const moyenBanque = document.getElementById("depotMoyen").value;
+    const notesUser = document.getElementById("depotNotes").value.trim();
+    const exercice = exerciceForDate(date);
+    const libelle = notesUser || "Dépôt en banque";
+
+    const submitBtn = document.getElementById("submitDepotForm");
+    submitBtn.disabled = true; submitBtn.textContent = "Enregistrement...";
+
+    const numDepense = nextNumero("depense", exercice);
+    const idDepense = crypto.randomUUID();
+    const numRecette = nextNumero("recette", exercice);
+    const idRecette = crypto.randomUUID();
+
+    const entryDepense = {
+      id: idDepense, numero: numDepense, exercice, type: "depense", date, libelle, montant,
+      compte: TRANSFERT_COMPTE, projet: "", moyenPaiement: "Espèces",
+      notes: `Dépôt vers la banque (${moyenBanque}) — contrepartie ${numRecette}`,
+      hasPhoto: false, estTransfert: true,
+    };
+    const entryRecette = {
+      id: idRecette, numero: numRecette, exercice, type: "recette", date, libelle, montant,
+      compte: TRANSFERT_COMPTE, projet: "", moyenPaiement: moyenBanque,
+      notes: `Provenant de la caisse espèces — contrepartie ${numDepense}`,
+      hasPhoto: false, estTransfert: true,
+    };
+
+    const ok1 = await upsertEntryRemote(entryDepense, undefined);
+    const ok2 = await upsertEntryRemote(entryRecette, undefined);
+    if(!ok1 || !ok2) showWarning("Erreur lors de l'enregistrement du dépôt.");
+    closeModal();
+    await loadAll();
+  };
+}
 
 function openImmoForm(editingImmo){
   const isEdit = !!editingImmo;
@@ -1471,6 +1647,7 @@ function attachContentEvents(){
   if(saveSettingsBtn) saveSettingsBtn.onclick = async ()=>{
     state.settings.nomAsso = document.getElementById("setNomAsso").value.trim();
     state.settings.soldeInitial = Number(document.getElementById("setSolde").value) || 0;
+    state.settings.soldeInitialEspeces = Number(document.getElementById("setSoldeEspeces").value) || 0;
     await saveAppData("settings", state.settings);
     render();
   };
@@ -1520,6 +1697,10 @@ function attachContentEvents(){
   if(exportAmortPdfBtn) exportAmortPdfBtn.onclick = exportAmortissementsPDF;
   const amortExerciceSel = document.getElementById("amortExerciceSel");
   if(amortExerciceSel) amortExerciceSel.onchange = ()=>{ state.amortExercice = amortExerciceSel.value; render(); };
+  const caisseExerciceSel = document.getElementById("caisseExerciceSel");
+  if(caisseExerciceSel) caisseExerciceSel.onchange = ()=>{ state.caisseExercice = caisseExerciceSel.value; render(); };
+  const depotBanqueBtn = document.getElementById("depotBanqueBtn");
+  if(depotBanqueBtn) depotBanqueBtn.onclick = openDepotBanqueForm;
   document.querySelectorAll("[data-immo-toggle]").forEach(el=>{
     el.onclick = ()=>{ state.amortOpenId = state.amortOpenId===el.dataset.immoToggle ? null : el.dataset.immoToggle; render(); };
   });
