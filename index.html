@@ -110,7 +110,7 @@ const DEFAULT_CATEGORIES = {
 };
 const TRANSFERT_COMPTE = "Dépôt en banque";
 const PAIEMENTS = ["Espèces","Chèque","Virement","Carte bancaire","Prélèvement"];
-const PAIEMENTS_BANQUE = PAIEMENTS.filter(p => p !== "Espèces");
+const PAIEMENTS_BANQUE = [...PAIEMENTS.filter(p => p !== "Espèces"), "Remise d'espèces"];
 
 function exerciceForDate(iso){
   const [y,m] = iso.split("-").map(Number);
