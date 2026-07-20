@@ -182,6 +182,17 @@ async function fetchPhoto(id){
   return data.photo;
 }
 
+async function loadPieceThumbnails(){
+  const ids = filteredEntries().filter(e=>e.hasPhoto).map(e=>e.id);
+  if(ids.length===0) return;
+  const { data, error } = await db.from("entries").select("id,photo").in("id", ids);
+  if(error || !data) return;
+  data.forEach(r=>{
+    const el = document.querySelector(`[data-thumb="${r.id}"]`);
+    if(el && r.photo) el.innerHTML = `<img src="${r.photo}" class="w-full h-full object-cover" style="width:32px;height:32px">`;
+  });
+}
+
 async function upsertEntryRemote(entry, photoValue){
   const row = {
     id: entry.id, numero: entry.numero, exercice: entry.exercice, type: entry.type,
@@ -572,6 +583,7 @@ function render(){
   if(state.tab==="parametres") content.innerHTML = renderParametres();
   attachContentEvents();
   if(state.tab==="documents") renderDocumentsCharts();
+  if(state.tab==="pieces") loadPieceThumbnails();
 }
 
 function stampHtml(numero){
@@ -685,10 +697,14 @@ function renderPieces(){
     `<div class="rounded-xl overflow-hidden" style="border:1px solid ${LINE};background:${CARD}">
       ${list.map((e,i)=>`
         <button data-open="${e.id}" class="entry-row w-full flex items-center gap-3 px-4 py-2.5 text-left" style="${i>0?`border-top:1px solid ${LINE}`:""}">
-          <span class="text-xs w-16 shrink-0 mono text-slate-500">${fmtDate(e.date)}</span>
           ${stampHtml(e.numero)}
-          <span class="flex-1 min-w-0 text-sm truncate hidden sm:block" style="color:${INK}">${esc(e.libelle)}</span>
-          <span class="text-xs text-slate-500 hidden md:inline truncate max-w-[110px]">${esc(e.compte)}</span>
+          ${e.hasPhoto
+            ? `<span data-thumb="${e.id}" class="shrink-0 rounded-md overflow-hidden flex items-center justify-center" style="width:32px;height:32px;background:${LINE}"><span class="text-xs">🖼️</span></span>`
+            : ``}
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium truncate" style="color:${INK}">${esc(e.libelle)}</p>
+            <p class="text-xs text-slate-500 truncate">${fmtDate(e.date)} · ${esc(e.compte)}</p>
+          </div>
           <span class="text-sm font-semibold w-24 text-right shrink-0 mono" style="color:${e.type==='recette'?GOLD:BRICK}">${e.type==='recette'?'+':'−'} ${fmtMontant(e.montant)}</span>
         </button>`).join("")}
     </div>`}
